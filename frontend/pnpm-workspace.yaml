@@ -1,6 +1,7 @@
 # pnpm 12 supply-chain policy: transformers.js pulls Node-only deps whose install scripts
 # the browser build never needs.
 allowBuilds:
+  core-js: false
   onnxruntime-node: false
   protobufjs: false
 minimumReleaseAgeExclude:

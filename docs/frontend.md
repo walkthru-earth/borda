@@ -137,3 +137,36 @@ The sync script accepts an explicit source directory before `BORDA_DATA_DIR`, th
 to `../data`. It publishes only the selected manifest and top-level Parquet exports, excluding
 nested country snapshots and raw history. Set `BASE_PATH`, `SITE_URL` and `VITE_SITE_ORIGIN`
 for the target deployment as well; changing a country profile does not change the site domain.
+
+## Typography
+
+Every user-facing size is `rem` (see the scale comment in `src/app.css`): `.75rem` (12px) is the
+floor for labels/badges/kickers, `.8125rem` meta, `.875rem` secondary UI, `.9375rem` cards and
+controls, `1rem` body. The Arabic root is 17px (`html[lang="ar"]`) with a roomier line-height,
+because Arabic script reads smaller than Latin at equal pixel size. Only the decorative hero
+illustration keeps fixed pixel sizes. Inter (variable) and Cairo are self-hosted via Fontsource.
+
+## Product analytics (PostHog)
+
+`src/lib/analytics.ts` initialises [posthog-js](https://posthog.com/docs/libraries/svelte) from
+the root layout `load` in the browser, following the current Svelte guide: newest
+`defaults` preset (SPA pageviews on `history_change`, strict replay minimums, URL hashes
+stripped), autocapture, session replay (inputs visible – search terms are the product, there are
+no accounts), web vitals, dead/rage clicks and exception capture. `kit.paths.relative` is `false`
+so replays resolve assets. Nobody is ever `identify()`-ed; anonymous distinct ids are enough.
+
+Named journey events (all also carry the `ui_language` super property):
+
+| event | when | key properties |
+|---|---|---|
+| `catalog_view` | home state settled (debounced) | `query`, `group`, `tag`, `seller`, `in_stock_only`, `sort`, price bounds, `ai_discovery`, `results` |
+| `product_view` | product page, once offers are known | `product_id`, `group`, `brand`, `sellers`, `lowest_price`, `currency` |
+| `seller_click` | outbound click to a seller listing (the conversion) | `product_id`, `seller`, `seller_host`, `price`, `availability` |
+| `document_click` | datasheet / datasheet search / seller document | `product_id`, `kind`, `url` |
+| `language_switch`, `ai_discovery_toggle`, `filters_reset`, `catalog_load_error` | as named | |
+
+Configuration comes from `PUBLIC_POSTHOG_KEY` and `PUBLIC_POSTHOG_HOST` (repository-root `.env`
+via `kit.env.dir`; GitHub secrets in `deploy-pages.yml`). Without a key everything is a no-op;
+`pnpm dev` never sends events unless `PUBLIC_POSTHOG_DEBUG=1`. Note for local testing: PostHog
+drops events from automation browsers (`navigator.webdriver`, `HeadlessChrome`) and tags
+`localhost` visitors as internal/test users.

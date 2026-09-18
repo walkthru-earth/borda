@@ -22,6 +22,8 @@ uv run pytest -q
 ```
 
 Runtime settings use `BORDA_*` (provider credentials retain their provider names): see `.env.example` and `src/borda/config.py`.
+The same root `.env` feeds the frontend (`kit.env.dir`); only `PUBLIC_*` variables reach the browser
+(`PUBLIC_POSTHOG_KEY`/`PUBLIC_POSTHOG_HOST` for analytics, see [Frontend](frontend.md)).
 
 ## Maintenance commands
 
@@ -83,6 +85,7 @@ when only derived exports need refreshing.
     model profile in `enrich/ai.py`, covered by `tests/test_enrich.py`, and now caught by the
     red-job gate above.
 - `ci.yml` – installed `borda --help` smoke test, ruff + pytest, Node 24 search/filter regression tests (`pnpm test`), svelte-check + build.
-- `deploy-pages.yml` – rebuilds the SPA with the latest Parquet after each data commit.
+- `deploy-pages.yml` – rebuilds the SPA with the latest Parquet after each data commit. Secrets:
+  `PUBLIC_POSTHOG_KEY`, `PUBLIC_POSTHOG_HOST` (PostHog analytics; the build is a no-op without them).
 
 Pre-commit (ruff format/lint, uv lock, secrets guard, pytest): `uv tool install pre-commit && pre-commit install`.

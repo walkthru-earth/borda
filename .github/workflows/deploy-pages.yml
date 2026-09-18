@@ -39,6 +39,10 @@ jobs:
         env:
           # project pages live under /<repo>/
           BASE_PATH: /${{ github.event.repository.name }}
+          # PostHog product analytics (browser SDK). The project key is public by design but is
+          # kept as a repository secret so it never appears in logs. Missing → analytics is a no-op.
+          PUBLIC_POSTHOG_KEY: ${{ secrets.PUBLIC_POSTHOG_KEY }}
+          PUBLIC_POSTHOG_HOST: ${{ secrets.PUBLIC_POSTHOG_HOST || 'https://eu.i.posthog.com' }}
         run: pnpm run build
       - uses: actions/upload-pages-artifact@v5
         with:
