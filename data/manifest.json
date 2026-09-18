@@ -16,21 +16,21 @@
  "schema_version": 1,
  "pipeline_version": "0.1.0",
  "parquet_format": "2.6",
- "generated_at": "2026-09-18T20:32:11Z",
+ "generated_at": "2026-09-18T20:38:51Z",
  "products": 21011,
- "offers_total": 46429,
+ "offers_total": 69896,
  "groups": {
   "3d-printing-cnc": 603,
   "connectors-cables": 1386,
-  "dev-boards": 918,
+  "dev-boards": 920,
   "displays-leds": 939,
-  "microcontrollers-ics": 1122,
-  "motors-drivers": 1452,
+  "microcontrollers-ics": 1121,
+  "motors-drivers": 1450,
   "other": 2240,
   "passive-components": 2446,
-  "power": 3240,
+  "power": 3239,
   "prototyping": 777,
-  "robotics-kits": 531,
+  "robotics-kits": 533,
   "semiconductors": 1611,
   "sensors": 1514,
   "tools-instruments": 1754,
@@ -38,16 +38,16 @@
  },
  "files": {
   "catalog.parquet": {
-   "sha256": "392be79e5b1d84f79ebac7c3017170ce68d5972c502c910f424987813306c027",
-   "bytes": 3387635,
-   "footer": 46269,
+   "sha256": "3af625c5e52777637b64c5b6e71ace8b96f502ec4d3c56832dbded521f259dcf",
+   "bytes": 3388287,
+   "footer": 46270,
    "rows": 21011,
    "row_groups": 11
   },
   "embeddings.parquet": {
-   "sha256": "5c25581eb9d636239156bf107073329feebeb4ee560e400346b5a725a8b4f1b9",
-   "bytes": 5405360,
-   "footer": 8003,
+   "sha256": "d8c6c1057c4ee1518201d8f7c4d4691a4d088d56e802aa2829710bc0fc376cd8",
+   "bytes": 5404830,
+   "footer": 8000,
    "rows": 21011,
    "row_groups": 6
   },
@@ -65,8 +65,8 @@
    "rows": 23467,
    "row_groups": 23
   },
-  "offers/year=2026/month=09/20260918T203211Z.parquet": {
-   "sha256": "59372883ff42c231024df279d4729715c04ae9028556f41e7f547dbef23847a8",
+  "offers/year=2026/month=09/20260918T203851Z.parquet": {
+   "sha256": "583d7e2ec784a7e1430487957b641b8f25bf39bc1a99160a08325b0531363962",
    "bytes": 1678523,
    "footer": 8084,
    "rows": 23467,
@@ -80,23 +80,23 @@
    "row_groups": 1
   },
   "series.parquet": {
-   "sha256": "235860f49d62c4f3e2f02fe1f79c5fd2492da434274a99d4ab74bafce2364277",
-   "bytes": 858726,
-   "footer": 13331,
-   "rows": 46396,
-   "row_groups": 12
+   "sha256": "e1417bd3d5ef08b40fb33cfe662021ad1385c03d63d031dfd3c7a2177a62800f",
+   "bytes": 926679,
+   "footer": 19476,
+   "rows": 69856,
+   "row_groups": 18
   },
   "stats.parquet": {
-   "sha256": "23106a8afc2d2ba1506d6b5094094be122cbd0543226d113f3f5c5e6d5b3b936",
-   "bytes": 1984979,
-   "footer": 31327,
+   "sha256": "2fe4555630bcfba37ea2055cdad1bb9b45efc8c0d91ca309ce18eaa19d81515e",
+   "bytes": 1985598,
+   "footer": 31328,
    "rows": 21010,
    "row_groups": 11
   },
-  "store_runs/year=2026/month=09/20260918T203211Z.parquet": {
-   "sha256": "b0cd831ccbfe8a7fce3851f2f4828cf0c0ec57b219a3f75e7caa1212f386bcf3",
-   "bytes": 3467,
-   "footer": 1869,
+  "store_runs/year=2026/month=09/20260918T203851Z.parquet": {
+   "sha256": "f35cca6744b6307c67a928153661c1509435ac6b7121d88524d4576aeebebb52",
+   "bytes": 3402,
+   "footer": 1882,
    "rows": 15,
    "row_groups": 1
   }
@@ -121,6 +121,16 @@
    "new_products": 351,
    "stores_ok": 10,
    "stores_failed": 2
+  },
+  {
+   "run_id": "20260918T203851Z",
+   "ts": "2026-09-18T20:38:51Z",
+   "digest": "faa7769784c307a4",
+   "products": 21011,
+   "offers": 23467,
+   "new_products": 0,
+   "stores_ok": 10,
+   "stores_failed": 0
   }
  ]
 }
