@@ -41,7 +41,7 @@ def test_parquet_history_is_partitioned_and_appends(tmp_path):
     assert (tmp_path / "offers/year=2025/month=10/r2.parquet").exists()
     assert (tmp_path / "store_runs/year=2025/month=10/r2.parquet").exists()
     meta = pq.read_metadata(tmp_path / "offers/year=2025/month=09/r1.parquet")
-    assert meta.row_group(0).column(0).compression == "SNAPPY"
+    assert meta.row_group(0).column(0).compression == "ZSTD"
 
     table = store.read_offers()
     assert table.num_rows == 3

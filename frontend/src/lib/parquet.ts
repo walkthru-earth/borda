@@ -6,6 +6,7 @@
  *    Every Parquet URL is versioned with the sha, so it is immutable and safely cacheable.
  *  - small, whole-table files (catalog, stats, embeddings) are fetched once as a single GET,
  *    persisted in the Cache API and parsed from memory.
+ *  - files are zstd-compressed (≈40% smaller than snappy); hyparquet-compressors decodes them.
  *  - series.parquet is read with range requests: the footer in ONE exact read (manifest
  *    tells us its size), then only the row groups whose statistics / Bloom filter can match
  *    `{product_id: {$eq}}` – a product's full price history costs ~2 small requests.
@@ -19,6 +20,7 @@ import {
 	type FileMetaData,
 	type ParquetQueryFilter
 } from 'hyparquet';
+import { compressors } from 'hyparquet-compressors'; // zstd (+ WASM snappy) for the browser
 import { base } from '$app/paths';
 
 export const DATA_BASE: string = (import.meta.env.VITE_DATA_BASE as string | undefined) ?? `${base}/data`;
@@ -122,7 +124,7 @@ function remote(path: string): Promise<Remote> {
 
 async function readWhole<T>(path: string, columns?: string[], filter?: ParquetQueryFilter): Promise<T[]> {
 	const file = await whole(path);
-	return (await parquetReadObjects({ file, columns, filter })) as T[];
+	return (await parquetReadObjects({ file, columns, filter, compressors })) as T[];
 }
 
 // ---------------------------------------------------------------------------- public API
@@ -152,7 +154,7 @@ export async function loadSeries(ids: string[]): Promise<Point[]> {
 	try {
 		const { file, metadata } = await remote('series.parquet');
 		const filter: ParquetQueryFilter = ids.length === 1 ? { product_id: { $eq: ids[0] } } : { product_id: { $in: ids } };
-		const rows = (await parquetReadObjects({ file, metadata, filter, useBloomFilters: true })) as Point[];
+		const rows = (await parquetReadObjects({ file, metadata, filter, compressors, useBloomFilters: true })) as Point[];
 		return rows.sort((a, b) => +a.ts - +b.ts);
 	} catch (e) {
 		console.warn('series unavailable', e);

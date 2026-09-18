@@ -17,6 +17,10 @@ on:
         description: "Run Pydantic AI enrichment"
         type: boolean
         default: true
+      fresh:
+        description: "Ignore checkpoints from an earlier attempt this month"
+        type: boolean
+        default: false
 
 concurrency:
   group: market-scrape
@@ -49,17 +53,30 @@ jobs:
       - name: Unit tests
         run: uv run pytest -q
 
-      # Page cache lets a re-run/retry within the same month reuse already fetched pages
-      # (incremental scraping). It is never committed.
-      - name: Restore scraper page cache + embedding model
-        uses: actions/cache@v4
+      # .cache/ holds three resumable things, none of them committed:
+      #   .cache/checkpoints/<YYYY-MM>/  per-store raw offers + enrichment mirror -> a re-run
+      #                                  or "Re-run failed jobs" continues where it stopped
+      #   .cache/http/                   fetched pages (TTL) -> retried stores are fast
+      #   .cache/hf/                     the MiniLM ONNX model (23 MB)
+      # Saved with `if: always()` below so a failed / timed-out attempt still keeps its progress.
+      - name: Restore checkpoints, page cache, embedding model
+        id: cache
+        uses: actions/cache/restore@v4
         with:
-          path: |
-            .cache/http
-            .cache/hf
-          key: http-cache-${{ github.run_id }}
+          path: .cache
+          key: scrape-cache-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
-            http-cache-
+            scrape-cache-
+
+      - name: Checkpoint status
+        run: |
+          month=$(date -u +%Y-%m)
+          if [ -d ".cache/checkpoints/$month" ]; then
+            echo "::notice::Resuming month $month – checkpointed stores: $(ls .cache/checkpoints/$month | grep -c report.json)"
+            ls -la ".cache/checkpoints/$month"
+          else
+            echo "no checkpoint for $month – fresh run"
+          fi
 
       - name: Scrape, normalise, enrich, persist
         id: run
@@ -73,8 +90,17 @@ jobs:
           args=()
           [ -n "${{ inputs.stores }}" ] && args+=(--stores ${{ inputs.stores }})
           [ -n "${{ inputs.max_pages }}" ] && args+=(--max-pages "${{ inputs.max_pages }}")
-          uv run egmarket run "${args[@]}" 2> diagnostics/run.log | tee diagnostics/run-summary.json
+          [ "${{ inputs.fresh }}" = "true" ] && args+=(--fresh)
+          # stderr (structured log + ::annotations::) goes to the job log AND run.log
+          uv run egmarket run "${args[@]}" 2> >(tee diagnostics/run.log >&2) | tee diagnostics/run-summary.json
           echo "run_id=$(python3 -c 'import json;print(json.load(open("diagnostics/run-summary.json"))["run_id"])')" >> "$GITHUB_OUTPUT"
+
+      - name: Save checkpoints, page cache, embedding model
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: .cache
+          key: scrape-cache-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Job summary
         if: always()
@@ -82,6 +108,7 @@ jobs:
           {
             echo "## Market scrape ${{ steps.run.outputs.run_id }}"
             echo
+            if [ ! -f diagnostics/latest.json ]; then echo "run did not produce diagnostics – see run.log artifact"; exit 0; fi
             echo '| store | status | offers | pages | error |'
             echo '|---|---|---:|---:|---|'
             python3 - <<'PY'
@@ -91,7 +118,11 @@ jobs:
               err = (s.get("error") or "").replace("|", "\\|")[:120]
               print(f"| {s['seller']} | {s['status']} | {s['offers']} | {s['pages']} | {err} |")
           print()
-          print(f"**offers** {d['offers_kept']} · **products** {d['products_total']} (+{d['products_new']}) · **flags** {d['flags']}")
+          print(f"**offers** {d['offers_kept']} · **products** {d['products_total']} (+{d['products_new']}) · **flags** {d['flags']} · **duration** {d['duration_s']/60:.1f} min")
+          if d.get("resumed_stores"):
+              print(f"\n♻️ resumed from checkpoint: {', '.join(d['resumed_stores'])}")
+          if d.get("embeddings"):
+              e = d["embeddings"]; print(f"\n**embeddings** computed={e['computed']} reused={e['reused']} neighbours={e['neighbours']}")
           if d.get("enrichment"):
               e = d["enrichment"]; print(f"\n**enrichment** enriched={e['enriched']} cached={e['cached']} merged={e['merged']} failed_batches={e['failed_batches']}")
           for err in d.get("errors", []):

@@ -17,6 +17,7 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 
 from . import SCHEMA_VERSION, __version__
+from .checkpoint import Checkpoint
 from .config import settings
 from .enrich import Enricher, EnrichReport
 from .enrich.embed import embed_catalog
@@ -34,6 +35,7 @@ from .models import (
 )
 from .normalize import Catalog, flag_offers
 from .normalize.categories import assign_group
+from .observability import notice, phase
 from .scrapers import STORES, Store, build_scraper
 from .storage import PARQUET_FORMAT, ParquetStore, build_series, reference_prices
 
@@ -54,6 +56,8 @@ class RunOptions:
     data_dir: Path | None = None
     diagnostics_dir: Path | None = None
     cache_dir: Path | None = None  # http page cache (default settings.cache)
+    resume: bool = True  # reuse per-store / enrichment checkpoints of the same month
+    checkpoint_key: str | None = None  # default: run month
     extra_stores: list[Store] = field(default_factory=list)
 
 
@@ -69,14 +73,16 @@ class Diagnostics(BaseModel):
     flags: dict[str, int] = Field(default_factory=dict)
     enrichment: dict | None = None
     embeddings: dict | None = None
+    resumed_stores: list[str] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)
 
 
 async def scrape_all(
-    stores: list[Store], opts: RunOptions
-) -> tuple[list[RawOffer], list[StoreReport]]:
+    stores: list[Store], opts: RunOptions, ckpt: Checkpoint | None = None
+) -> tuple[list[RawOffer], list[StoreReport], list[str]]:
     sem = asyncio.Semaphore(opts.store_concurrency)
     max_pages = opts.max_pages or settings.max_pages_per_store
+    resumed: list[str] = []
     async with Fetcher(cache_dir=opts.cache_dir) as fetcher:
 
         async def one(store: Store) -> tuple[list[RawOffer], StoreReport]:
@@ -85,27 +91,38 @@ async def scrape_all(
                     return [], StoreReport(
                         seller=store.slug, status=ScrapeStatus.SKIPPED, error=store.note
                     )
+                if ckpt and opts.resume and (saved := ckpt.load_store(store.slug)):
+                    offers, report = saved
+                    resumed.append(store.slug)
+                    log.info("%s: resumed from checkpoint (%d offers)", store.slug, len(offers))
+                    return offers, report
                 try:
                     scraper = build_scraper(store, fetcher, max_pages=max_pages)
                 except ValueError as exc:
                     return [], StoreReport(
                         seller=store.slug, status=ScrapeStatus.FAILED, error=str(exc)
                     )
-                log.info("scraping %s", store.slug)
+                log.info("%s: scraping %s", store.slug, store.base_url)
                 offers, report = await scraper.run()
-                log.info(
-                    "%s: %s, %d offers, %d pages",
+                level = logging.INFO if report.status == ScrapeStatus.OK else logging.WARNING
+                log.log(
+                    level,
+                    "%s: %s – %d offers, %d pages, %.0fs%s",
                     store.slug,
-                    report.status,
+                    report.status.value,
                     report.offers,
                     report.pages,
+                    report.duration_s,
+                    f" – {report.error}" if report.error else "",
                 )
+                if ckpt:
+                    ckpt.save_store(store.slug, offers, report)
                 return offers, report
 
         results = await asyncio.gather(*(one(s) for s in stores))
         log.info("http requests=%d cache_hits=%d", fetcher.requests, fetcher.cache_hits)
     offers = [o for chunk, _ in results for o in chunk]
-    return offers, [r for _, r in results]
+    return offers, [r for _, r in results], resumed
 
 
 def dedupe_offers(offers: list[RawOffer], catalog: Catalog) -> tuple[list[OfferRecord], int]:
@@ -148,32 +165,65 @@ async def run_pipeline(opts: RunOptions) -> tuple[Diagnostics, int]:
     stores = [*STORES, *opts.extra_stores]
     if opts.stores:
         stores = [s for s in stores if s.slug in opts.stores]
+    ckpt = Checkpoint(
+        (opts.cache_dir or settings.cache).parent / "checkpoints",
+        opts.checkpoint_key or ts.strftime("%Y-%m"),
+    )
+    if opts.resume and (cs := ckpt.summary())["stores"]:
+        notice(
+            f"resuming checkpoint {ckpt.key}: {cs['stores']} stores done, enrichment mirror={bool(cs['enrichment'])}"
+        )
 
-    # 1. scrape (fail-safe per store)
-    raw_offers, reports = await scrape_all(stores, opts)
+    # 1. scrape (fail-safe per store, checkpointed per store)
+    with phase(f"scrape {len(stores)} stores"):
+        raw_offers, reports, resumed = await scrape_all(
+            stores, opts, ckpt if not opts.dry_run else None
+        )
     ok_stores = [r for r in reports if r.status in (ScrapeStatus.OK, ScrapeStatus.PARTIAL)]
     errors += [f"{r.seller}: {r.error}" for r in reports if r.status == ScrapeStatus.FAILED]
+    for r in reports:
+        if r.status == ScrapeStatus.FAILED:
+            log.error("store failed: %s – %s", r.seller, r.error)
+        elif r.status == ScrapeStatus.PARTIAL:
+            log.warning("store partial: %s – %d offers – %s", r.seller, r.offers, r.error)
 
     # 2. dedupe against the existing catalog
-    catalog = store.read_catalog()
-    records, new_products = dedupe_offers(raw_offers, catalog)
+    with phase("dedupe + canonical names"):
+        catalog = store.read_catalog()
+        before = len(catalog.products)
+        records, new_products = dedupe_offers(raw_offers, catalog)
+        log.info(
+            "%d offers -> %d products (%d new, %d before)",
+            len(records),
+            len(catalog.products),
+            new_products,
+            before,
+        )
 
-    # 3. enrich (best effort) then follow merges
+    # 3. enrich (best effort, cache mirrored to the checkpoint) then follow merges
     enrich_report: EnrichReport | None = None
     if opts.ai and settings.ai_enabled and records and not opts.dry_run:
-        enrich_report = await Enricher(store).enrich(catalog, limit=opts.ai_limit)
-        if enrich_report.error:
-            errors.append(f"enrichment: {enrich_report.error}")
-        for r in records:
-            r.product_id = catalog.resolve_id(r.product_id)
+        with phase("Pydantic AI enrichment"):
+            enrich_report = await Enricher(store, mirror_path=ckpt.enrichment_path).enrich(
+                catalog, limit=opts.ai_limit
+            )
+            log.info(
+                "enrichment: %s", {k: v for k, v in enrich_report.__dict__.items() if k != "merges"}
+            )
+            if enrich_report.error:
+                errors.append(f"enrichment: {enrich_report.error}")
+            for r in records:
+                r.product_id = catalog.resolve_id(r.product_id)
 
     # 4. validate / flag against recent history
-    history = store.read_offers()
-    flags = flag_offers(
-        records,
-        reference_prices=reference_prices(history, catalog),
-        factor=settings.outlier_factor,
-    )
+    with phase("validate + flag outliers"):
+        history = store.read_offers()
+        flags = flag_offers(
+            records,
+            reference_prices=reference_prices(history, catalog),
+            factor=settings.outlier_factor,
+        )
+        log.info("flags: %s", flags or "none")
 
     run = Run(
         run_id=run_id,
@@ -198,6 +248,7 @@ async def run_pipeline(opts: RunOptions) -> tuple[Diagnostics, int]:
             if enrich_report
             else None
         ),
+        resumed_stores=resumed,
         errors=errors,
     )
 
@@ -219,25 +270,34 @@ async def run_pipeline(opts: RunOptions) -> tuple[Diagnostics, int]:
 
     # 5. embeddings + nearest neighbours (best effort; needs the ONNX model download)
     if opts.embeddings and settings.embeddings_enabled:
-        emb = embed_catalog(store, catalog)
-        diag.embeddings = emb.__dict__
-        if emb.error:
-            diag.errors.append(f"embeddings: {emb.error}")
+        with phase("embeddings + nearest neighbours"):
+            emb = embed_catalog(store, catalog)
+            diag.embeddings = emb.__dict__
+            log.info("embeddings: %s", emb.__dict__)
+            if emb.error:
+                diag.errors.append(f"embeddings: {emb.error}")
 
     # 6. persist canonical history + catalog (Parquet)
-    store.write_run(run)
-    store.write_catalog(catalog)
+    with phase("persist history + catalog"):
+        store.write_run(run)
+        store.write_catalog(catalog)
 
     # 7. derived exports rebuilt from the full history (merges/redirects apply retroactively)
-    series_rows, stats_rows = build_series(store.read_offers(), catalog)
-    store.write_series(series_rows)
-    store.write_stats(stats_rows)
+    with phase("export series + stats + manifest"):
+        series_rows, stats_rows = build_series(store.read_offers(), catalog)
+        store.write_series(series_rows)
+        store.write_stats(stats_rows)
+        _write_manifest(store, run, catalog, new_products)
+        for path, info in sorted(store.written.items()):
+            log.info("wrote %-45s %8.1f KB  rows=%s", path, info["bytes"] / 1024, info["rows"])
 
-    # 8. manifest
-    _write_manifest(store, run, catalog, new_products)
-
+    ckpt.clear()  # everything is persisted – next run starts clean
     diag.duration_s = round(time.monotonic() - t0, 1)
     _write_diagnostics(diag_dir, diag)
+    notice(
+        f"run {run_id}: {len(records)} offers, {len(catalog.products)} products (+{diag.products_new}), "
+        f"{len(ok_stores)}/{len([r for r in reports if r.status != ScrapeStatus.SKIPPED])} stores ok, {diag.duration_s / 60:.1f} min"
+    )
     return diag, 0
 
 

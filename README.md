@@ -33,7 +33,7 @@ PrestaShop XHR, Wix storefront GraphQL) – Odoo and EasyTest are the only HTML 
 Add a store: append a `Store(...)` in `src/egmarket/scrapers/stores.py`. Add a platform:
 subclass `BaseScraper` (yield `RawOffer`) and register it in `scrapers/__init__.py`.
 
-## Data layout (`data/`, Parquet format 2.6 · snappy · DataPage v2 · page index)
+## Data layout (`data/`, Parquet format 2.6 · zstd-9 · DataPage v2 · page index)
 
 | path | contents | layout |
 |---|---|---|
@@ -114,10 +114,18 @@ Env knobs (all `EGMARKET_*`): see `.env.example` and `src/egmarket/config.py`.
 
 ## GitHub Actions
 
-- `monthly-scrape.yml` – cron on the 1st: uv (cached) → pytest → scrape (per-store fail-safe,
-  page cache restored for retries) → commit `data/` + `diagnostics/` → upload logs as artifact →
-  job summary table; turns red only if a store failed (data is still committed).
-  Secret: `HETZNER_INFERENCE_TOKEN`. Manual dispatch accepts `stores`, `max_pages`, `ai`.
+- `monthly-scrape.yml` – cron on the 1st: uv (cached) → pytest → scrape → … → commit `data/` +
+  `diagnostics/` → upload logs as artifact → job summary table; turns red only if a store failed
+  (data is still committed). Secrets: `HETZNER_INFERENCE_TOKEN`, optional `EGMARKET_PROXY_URL`.
+  Manual dispatch accepts `stores`, `max_pages`, `ai`, `fresh`.
+  - **Logs:** every phase is a collapsible `::group::` with its duration; stores log progress every
+    10 pages; enrichment logs every 5 batches; failures surface as `::error::`/`::warning::`
+    annotations and in the step summary; the full log is the `diagnostics-<run>` artifact.
+  - **Checkpoints / resume:** `.cache/checkpoints/<YYYY-MM>/` keeps each finished store's raw
+    offers and a mirror of the LLM cache after every batch. The cache is saved with
+    `if: always()`, so after a failure or the 170-min timeout, **"Re-run failed jobs"** (or the
+    next dispatch that month) skips finished stores and already-enriched products and continues.
+    Cleared automatically once a run persists. `--fresh` / `fresh=true` ignores it.
 - `ci.yml` – ruff + pytest, svelte-check + build.
 - `deploy-pages.yml` – rebuilds the SPA with the latest Parquet after each data commit.
 
@@ -128,7 +136,8 @@ Pre-commit (ruff format/lint, uv lock, secrets guard, pytest): `uv tool install 
 Static SPA, mobile-first, no server. `manifest.json` is read first (never cached); every Parquet
 URL is versioned by sha, whole-table files (catalog, stats, embeddings) are fetched once and kept
 in the Cache API, `series.parquet` is read with range requests (exact footer size from the
-manifest, Bloom + statistics pruning). Browse by taxonomy group, tag, seller, stock, price;
+manifest, Bloom + statistics pruning). Files are zstd-compressed and decoded with
+[hyparquet-compressors](https://github.com/hyparam/hyparquet-compressors) (also brings WASM snappy). Browse by taxonomy group, tag, seller, stock, price;
 search official names, local/Arabic names and tags with prefix matching; ✨ AI search adds
 meaning-based results; product pages show a touch-friendly SVG price chart per seller,
 min/median/max, all seller links, "also sold as" local names and similar products.

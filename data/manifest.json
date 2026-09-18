@@ -24,37 +24,37 @@
  },
  "files": {
   "catalog.parquet": {
-   "sha256": "9a158c989f3a4ec84dd33f0f091098bef99b69aa482c37b3d5ed91a930f24ed3",
-   "bytes": 4634519,
-   "footer": 34183,
+   "sha256": "0757fd84794e7a9da25848f96bde039da9e8d6a9c06ef0ab82968cf1a153bbe3",
+   "bytes": 3045005,
+   "footer": 34136,
    "rows": 20547,
    "row_groups": 11
   },
   "embeddings.parquet": {
-   "sha256": "2ad1071be4b055cdf04348ec6e3429efadb6e51ccfee1af941c32bde5d09824b",
-   "bytes": 8653311,
-   "footer": 7973,
+   "sha256": "87504b9e429ee78b1063ceedb975d5a1ea2b18728b048576e0a287f6d1fc5278",
+   "bytes": 5284371,
+   "footer": 7963,
    "rows": 20547,
    "row_groups": 6
   },
   "redirects.parquet": {
-   "sha256": "0b6dff929cba9a0632b7240e260653415cfb63520594b17f68b14bdbd455e435",
-   "bytes": 48494,
+   "sha256": "3c36688babf598749d86ac1baef67f5be9fc6d0600d7cf2c93f48099e351116b",
+   "bytes": 32048,
    "footer": 766,
    "rows": 1439,
    "row_groups": 1
   },
   "series.parquet": {
-   "sha256": "8e995cec26f9138196ac12f1146c1682d2f02e9356e47fece89140649e6f0d5f",
-   "bytes": 1115198,
-   "footer": 7253,
+   "sha256": "cb329d0137726a9ca62701a23631863713e5c1622c48a3cfb2f62083a94f7e57",
+   "bytes": 721510,
+   "footer": 7159,
    "rows": 22933,
    "row_groups": 6
   },
   "stats.parquet": {
-   "sha256": "5b11d637bcb8c9296fba2a1859569cca37835ba0fec52c417aea98f003ad2f0f",
-   "bytes": 1938503,
-   "footer": 24802,
+   "sha256": "b93eb1ac3308e6d573481dd8697d32c4037ef3d1836b64b0f0348ed520fb816d",
+   "bytes": 1309866,
+   "footer": 24709,
    "rows": 20494,
    "row_groups": 11
   }

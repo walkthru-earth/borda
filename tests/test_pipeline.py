@@ -201,3 +201,91 @@ async def test_reindex_replays_history_and_keeps_enrichment(tmp_path, monkeypatc
     assert cat2.products["hc-sr04-ultrasonic-distance-sensor"].enriched
     assert cat2.resolve_id(old_id) == "hc-sr04-ultrasonic-distance-sensor"
     assert all(v in cat2.products and k not in cat2.products for k, v in cat2.redirects.items())
+
+
+@respx.mock
+async def test_checkpoint_resumes_completed_stores(tmp_path, monkeypatch):
+    monkeypatch.setattr("egmarket.http.settings.max_retries", 0)
+    cache = tmp_path / "cache" / "http"
+    common = dict(
+        stores=[SHOP.slug, WOO.slug],
+        extra_stores=[SHOP, WOO],
+        ai=False,
+        embeddings=False,
+        data_dir=tmp_path / "data",
+        diagnostics_dir=tmp_path / "g",
+        cache_dir=cache,
+        run_id="20250901T000000Z",
+        ts=datetime(2025, 9, 1, tzinfo=UTC),
+        checkpoint_key="test",
+    )
+    # attempt 1: shop-a completes, shop-b dies -> only shop-a is checkpointed
+    respx.get(url__regex=r"https://a\.test/products\.json.*").side_effect = [
+        httpx.Response(
+            200,
+            json={
+                "products": [
+                    {
+                        "title": "Arduino UNO R3",
+                        "handle": "uno",
+                        "variants": [{"price": "450.00", "available": True}],
+                    }
+                ]
+            },
+        ),
+        httpx.Response(200, json={"products": []}),
+    ]
+    respx.get(url__regex=r"https://b\.test/.*").mock(return_value=httpx.Response(503))
+    diag1, code = await run_pipeline(RunOptions(**common))
+    assert code == 0 and diag1.resumed_stores == []
+    from egmarket.checkpoint import Checkpoint
+
+    ckpt = Checkpoint(tmp_path / "cache" / "checkpoints", "test")
+    assert not ckpt.dir.exists()  # successful run clears its checkpoint
+    ckpt = Checkpoint(tmp_path / "cache2" / "checkpoints", "test")
+
+    # simulate a crash after shop-a finished: re-create the checkpoint, then re-run
+    from egmarket.models import RawOffer, ScrapeStatus, StoreReport
+
+    offers = [
+        RawOffer(
+            seller="shop-a", raw_name="Arduino UNO R3", url="https://a.test/products/uno", price=450
+        )
+    ]
+
+    ckpt.save_store(
+        SHOP.slug, offers, StoreReport(seller="shop-a", status=ScrapeStatus.OK, offers=1, pages=1)
+    )
+    respx.clear()  # new attempt: a.test would now fail, b.test works
+    a_route = respx.get(url__regex=r"https://a\.test/.*").mock(return_value=httpx.Response(500))
+    respx.get(url__regex=r"https://b\.test/wp-json/wc/store/v1/products.*").side_effect = [
+        httpx.Response(
+            200,
+            json=[
+                {
+                    "name": "HC-SR04",
+                    "permalink": "https://b.test/product/sr04",
+                    "prices": {"price": "4500", "currency_code": "EGP", "currency_minor_unit": 2},
+                    "is_in_stock": True,
+                    "categories": [],
+                }
+            ],
+        ),
+        httpx.Response(200, json=[]),
+    ]
+    diag2, code = await run_pipeline(
+        RunOptions(
+            **{
+                **common,
+                "run_id": "20251001T000000Z",
+                "ts": datetime(2025, 10, 1, tzinfo=UTC),
+                "cache_dir": tmp_path / "cache2" / "http",
+                "checkpoint_key": "test",
+            }
+        )
+    )
+    assert code == 0
+    assert diag2.resumed_stores == ["shop-a"]  # served from checkpoint, a.test never called
+    assert a_route.call_count == 0
+    assert {s.seller: s.status.value for s in diag2.stores} == {"shop-a": "ok", "shop-b": "ok"}
+    assert not (tmp_path / "cache2" / "checkpoints" / "test").exists()

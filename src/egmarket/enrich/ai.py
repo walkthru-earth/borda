@@ -16,8 +16,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import shutil
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent, ModelRetry, RunContext
@@ -31,6 +33,7 @@ from ..normalize import Catalog, slugify
 from ..normalize import names as _names
 from ..normalize.categories import assign_group
 from ..storage import ParquetStore
+from ..storage.parquet import read_enrichment_file
 
 log = logging.getLogger(__name__)
 
@@ -147,17 +150,28 @@ class Enricher:
         model: Model | str | None = None,
         requests_per_minute: int | None = None,
         key_aliases: dict[str, str] | None = None,
+        mirror_path: Path | None = None,
     ):
         self.store = store
         self.key_aliases = key_aliases or {}  # product id -> cache key (e.g. via redirects)
+        self.mirror_path = mirror_path  # checkpoint copy, refreshed after every batch
         self.agent = agent or enrichment_agent
         self._model = model
         self.model_name = model if isinstance(model, str) else settings.ai_model
         self.cache: dict[str, Enrichment] = store.read_enrichment()
+        if mirror_path and mirror_path.exists():
+            extra = read_enrichment_file(mirror_path)
+            new = {k: v for k, v in extra.items() if k not in self.cache}
+            if new:
+                log.info("enrichment: resumed %d cached items from checkpoint", len(new))
+                self.cache.update(new)
         self.limiter = RateLimiter(requests_per_minute or settings.ai_requests_per_minute, 60)
 
     def save(self) -> None:
         self.store.write_enrichment(self.cache, self.model_name, utcnow())
+        if self.mirror_path:
+            self.mirror_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(self.store.enrichment_path, self.mirror_path)
 
     @staticmethod
     def _to_input(p: Product) -> EnrichInput:
@@ -198,6 +212,13 @@ class Enricher:
             log.warning("enrichment disabled: %s", report.error)
             return report
 
+        n_batches = -(-len(pending) // batch_size)
+        log.info(
+            "enrichment: %d products in %d batches (model %s)",
+            len(pending),
+            n_batches,
+            self.model_name,
+        )
         for i in range(0, len(pending), batch_size):
             batch = pending[i : i + batch_size]
             inputs = [self._to_input(p) for p in batch]
@@ -219,6 +240,14 @@ class Enricher:
                     await asyncio.sleep(60)
                 continue
             report.batches += 1
+            if report.batches % 5 == 0 or report.batches == n_batches:
+                log.info(
+                    "enrichment: batch %d/%d done, enriched=%d merged=%d",
+                    report.batches,
+                    n_batches,
+                    report.enriched + len(result.output.items),
+                    report.merged,
+                )
             for e in result.output.items:
                 if (p := catalog.products.get(e.key)) is None:
                     continue

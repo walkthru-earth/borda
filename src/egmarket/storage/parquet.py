@@ -1,5 +1,5 @@
 """Parquet store – the canonical on-disk format, readable directly by the SvelteKit
-frontend through hyparquet (snappy + Parquet format 2.x, flat/list columns only).
+frontend through hyparquet + hyparquet-compressors (zstd, Parquet format 2.x).
 
 Layout under `data/`:
   catalog.parquet                              products, sorted by id (rewritten every run)
@@ -39,7 +39,8 @@ from ..normalize import Catalog
 PARQUET_FORMAT = "2.6"  # latest Parquet format spec version pyarrow can emit
 WRITE_KW: dict[str, Any] = {
     "version": PARQUET_FORMAT,
-    "compression": "snappy",  # hyparquet decodes snappy without extra packages
+    "compression": "zstd",  # ~40% smaller than snappy; browser decodes via hyparquet-compressors
+    "compression_level": 9,
     "use_dictionary": True,
     "write_statistics": True,
     "write_page_index": True,  # column index + offset index -> page-level pruning
@@ -356,14 +357,7 @@ class ParquetStore:
 
     # ------------------------------------------------------------------ enrichment cache
     def read_enrichment(self) -> dict[str, Enrichment]:
-        if not self.enrichment_path.exists():
-            return {}
-        out = {}
-        for row in pq.read_table(self.enrichment_path).to_pylist():
-            row.pop("model", None)
-            row.pop("ts", None)
-            out[row["key"]] = Enrichment.model_validate(row)
-        return out
+        return read_enrichment_file(self.enrichment_path)
 
     def write_enrichment(self, cache: dict[str, Enrichment], model: str, ts: datetime) -> str:
         rows = [
@@ -373,6 +367,17 @@ class ParquetStore:
         return self._write(
             self.enrichment_path, pa.Table.from_pylist(rows, schema=ENRICHMENT_SCHEMA)
         )
+
+
+def read_enrichment_file(path: Path) -> dict[str, Enrichment]:
+    if not path.exists():
+        return {}
+    out = {}
+    for row in pq.read_table(path).to_pylist():
+        row.pop("model", None)
+        row.pop("ts", None)
+        out[row["key"]] = Enrichment.model_validate(row)
+    return out
 
 
 def store_reports_table(run_id: str, ts: datetime, reports: list[StoreReport]) -> pa.Table:

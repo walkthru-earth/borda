@@ -15,6 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field, HttpUrl, ValidationError
 
 from ..http import Fetcher
 from ..models import RawOffer, ScrapeStatus, Slug, StoreReport
+from ..observability import Progress
 
 log = logging.getLogger(__name__)
 
@@ -68,9 +69,14 @@ class BaseScraper(ABC):
         t0 = time.monotonic()
         offers: list[RawOffer] = []
         error: str | None = None
+        progress = Progress(self.store.slug, every=10)
+        seen_pages = 0
         try:
             async for o in self.iter_offers():
                 offers.append(o)
+                if self.pages != seen_pages:
+                    seen_pages = self.pages
+                    progress.tick(f"page {self.pages}, {len(offers)} offers")
         except Exception as exc:  # noqa: BLE001 - we must keep the pipeline alive
             error = f"{type(exc).__name__}: {exc}"
             log.error("%s failed after %d offers: %s", self.store.slug, len(offers), error)

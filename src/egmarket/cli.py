@@ -5,12 +5,12 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import logging
 import sys
 
 import pyarrow.compute as pc
 
 from .config import settings
+from .observability import setup_logging
 from .pipeline import RunOptions, rebuild_exports, reindex, run_pipeline
 from .scrapers import STORES
 from .storage import ParquetStore, build_index, search
@@ -29,6 +29,9 @@ def _p() -> argparse.ArgumentParser:
     r.add_argument("--ai-limit", type=int, help="max products to enrich this run")
     r.add_argument("--dry-run", action="store_true", help="scrape + normalise, write nothing")
     r.add_argument("--run-id")
+    r.add_argument(
+        "--fresh", action="store_true", help="ignore checkpoints from an earlier attempt this month"
+    )
 
     sub.add_parser("stores", help="list registered stores")
 
@@ -56,13 +59,7 @@ def _p() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = _p().parse_args(argv)
-    logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-        stream=sys.stderr,
-    )
-    for noisy in ("httpx", "httpcore", "openai"):
-        logging.getLogger(noisy).setLevel(logging.WARNING)
+    setup_logging(args.verbose)
 
     if args.cmd == "run":
         diag, code = asyncio.run(
@@ -73,6 +70,7 @@ def main(argv: list[str] | None = None) -> int:
                     ai=not args.no_ai,
                     ai_limit=args.ai_limit,
                     embeddings=not args.no_embeddings,
+                    resume=not args.fresh,
                     dry_run=args.dry_run,
                     run_id=args.run_id,
                 )

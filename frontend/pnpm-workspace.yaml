@@ -3,3 +3,5 @@
 allowBuilds:
   onnxruntime-node: false
   protobufjs: false
+minimumReleaseAgeExclude:
+  - hyparquet-compressors@1.1.2

@@ -111,6 +111,7 @@ def embed_catalog(store: ParquetStore, catalog: Catalog, *, top_k: int = 8) -> E
             todo.append(p)
     report.reused = len(vectors)
 
+    log.info("embeddings: %d cached, %d to compute", len(vectors), len(todo))
     if todo:
         try:
             embedder = Embedder()
