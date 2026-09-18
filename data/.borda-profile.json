@@ -1,0 +1,14 @@
+{
+  "id": "egypt",
+  "country_code": "EG",
+  "country_name": "Egypt",
+  "country_name_ar": "مصر",
+  "currency": "EGP",
+  "locale": "en-EG",
+  "locale_ar": "ar-EG",
+  "timezone": "Africa/Cairo",
+  "languages": [
+    "en",
+    "ar"
+  ]
+}
