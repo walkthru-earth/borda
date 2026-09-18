@@ -9,6 +9,7 @@ import respx
 from borda.http import Fetcher
 from borda.models import Availability, ScrapeStatus
 from borda.scrapers import BY_SLUG, PLATFORMS, Store, build_scraper
+from borda.scrapers.docs import extract_doc_links
 from borda.scrapers.stores import STORES
 
 
@@ -262,3 +263,8 @@ async def test_invalid_rows_are_dropped_not_fatal(fetcher):
     respx.get(url__regex=r".*").mock(return_value=httpx.Response(200, json=page))
     offers, report = await build_scraper(store, fetcher, max_pages=1).run()
     assert report.status == ScrapeStatus.OK and len(offers) == 1 and len(report.warnings) == 1
+
+
+def test_malformed_document_href_is_ignored():
+    html = '<a href="http://e%20%20http://www.example.com/data_sheet/74HC_HCT30.pdf">datasheet</a>'
+    assert extract_doc_links(html, "https://shop.test/product") == []

@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from urllib.parse import urljoin
 
+from pydantic import HttpUrl, TypeAdapter, ValidationError
+
 _HREF = re.compile(r"""<a\s[^>]*?href\s*=\s*["']([^"']+)["'][^>]*>(.*?)</a>""", re.I | re.S)
 _TAGS = re.compile(r"<[^>]+>")
 _DOC_HINT = re.compile(
@@ -17,6 +19,16 @@ _SKIP = re.compile(
     r"facebook|instagram|twitter|youtube\.com/(channel|@)|whatsapp|tiktok|/cart|/checkout|mailto:|tel:",
     re.I,
 )
+_HTTP_URL = TypeAdapter(HttpUrl)
+
+
+def _is_http_url(value: str) -> bool:
+    """Reject malformed seller hrefs before they reach the strict Product schema."""
+    try:
+        _HTTP_URL.validate_python(value)
+    except ValidationError:
+        return False
+    return True
 
 
 def extract_doc_links(fragment: str | None, base_url: str) -> list[str]:
@@ -28,7 +40,7 @@ def extract_doc_links(fragment: str | None, base_url: str) -> list[str]:
     for href, inner in _HREF.findall(fragment):
         text = _TAGS.sub(" ", inner)
         url = urljoin(base_url, href.strip())
-        if not url.startswith("http") or _SKIP.search(url):
+        if not _is_http_url(url) or _SKIP.search(url):
             continue
         blob = f"{text} {url}"
         if not _DOC_HINT.search(blob):
