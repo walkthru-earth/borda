@@ -23,6 +23,17 @@ class FetchError(RuntimeError):
     pass
 
 
+class RateLimited(FetchError):
+    """HTTP 429 – honour Retry-After (seconds) when the server sends one."""
+
+    def __init__(self, response: httpx.Response) -> None:
+        super().__init__(f"HTTP 429 for {response.url}")
+        try:
+            self.retry_after = float(response.headers.get("retry-after", "") or 0)
+        except ValueError:
+            self.retry_after = 0.0
+
+
 class Fetcher:
     def __init__(
         self,
@@ -37,8 +48,10 @@ class Fetcher:
         self.delay_s = settings.request_delay_s if delay_s is None else delay_s
         self.retries = settings.max_retries if retries is None else retries
         self._last_call: dict[str, float] = {}
+        self.host_delay: dict[str, float] = {}  # per-host politeness override
         self._locks: dict[str, asyncio.Lock] = {}
         self.client = httpx.AsyncClient(
+            proxy=settings.proxy_url or None,  # optional egress proxy (some stores block DC IPs)
             headers={
                 "User-Agent": settings.user_agent,
                 "Accept": "text/html,application/json;q=0.9,*/*;q=0.8",
@@ -82,7 +95,8 @@ class Fetcher:
     async def _throttle(self, host: str) -> None:
         lock = self._locks.setdefault(host, asyncio.Lock())
         async with lock:
-            wait = self._last_call.get(host, 0) + self.delay_s - time.monotonic()
+            delay = self.host_delay.get(host, self.delay_s)
+            wait = self._last_call.get(host, 0) + delay - time.monotonic()
             if wait > 0:
                 await asyncio.sleep(wait)
             self._last_call[host] = time.monotonic()
@@ -106,7 +120,9 @@ class Fetcher:
             try:
                 self.requests += 1
                 r = await self.client.get(url, params=params, headers=headers)
-                if r.status_code in (403, 429, 500, 502, 503, 504):
+                if r.status_code == 429:
+                    raise RateLimited(r)
+                if r.status_code in (403, 500, 502, 503, 504):
                     raise FetchError(f"HTTP {r.status_code} for {r.url}")
                 r.raise_for_status()
                 body = r.text
@@ -118,6 +134,8 @@ class Fetcher:
                 if attempt == self.retries:
                     break
                 backoff = min(2**attempt * 1.5, 20)
+                if isinstance(exc, RateLimited):
+                    backoff = max(exc.retry_after, 15.0 * (attempt + 1))
                 log.warning("fetch %s failed (%s), retry in %.1fs", url, exc, backoff)
                 await asyncio.sleep(backoff)
         raise FetchError(f"giving up on {url}: {last_exc}") from last_exc
@@ -133,7 +151,9 @@ class Fetcher:
             try:
                 self.requests += 1
                 r = await self.client.post(url, json=payload, headers=headers)
-                if r.status_code in (403, 429, 500, 502, 503, 504):
+                if r.status_code == 429:
+                    raise RateLimited(r)
+                if r.status_code in (403, 500, 502, 503, 504):
                     raise FetchError(f"HTTP {r.status_code} for {r.url}")
                 r.raise_for_status()
                 return r.json()
@@ -142,6 +162,8 @@ class Fetcher:
                 if attempt == self.retries:
                     break
                 backoff = min(2**attempt * 1.5, 20)
+                if isinstance(exc, RateLimited):
+                    backoff = max(exc.retry_after, 15.0 * (attempt + 1))
                 log.warning("post %s failed (%s), retry in %.1fs", url, exc, backoff)
                 await asyncio.sleep(backoff)
         raise FetchError(f"giving up on {url}: {last_exc}") from last_exc

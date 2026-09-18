@@ -151,3 +151,53 @@ async def test_all_stores_failing_exits_nonzero_and_writes_nothing(tmp_path, mon
     )
     assert code == 1 and not (tmp_path / "d").exists()
     assert (tmp_path / "g" / "latest.json").exists()
+
+
+@respx.mock
+async def test_reindex_replays_history_and_keeps_enrichment(tmp_path, monkeypatch):
+    from egmarket.enrich import ai as ai_mod
+    from egmarket.models import Enrichment
+    from egmarket.pipeline import reindex
+
+    monkeypatch.setattr("egmarket.http.settings.max_retries", 0)
+    data = tmp_path / "data"
+    _mock_stores("38000")
+    opts = RunOptions(
+        stores=[SHOP.slug, WOO.slug],
+        extra_stores=[SHOP, WOO],
+        ai=False,
+        embeddings=False,
+        data_dir=data,
+        diagnostics_dir=tmp_path / "g",
+        cache_dir=tmp_path / "c",
+        run_id="20250901T000000Z",
+        ts=datetime(2025, 9, 1, tzinfo=UTC),
+    )
+    await run_pipeline(opts)
+    store = ParquetStore(data)
+    cat = store.read_catalog()
+    # pretend the LLM renamed the ultrasonic sensor and cache that under the new id
+    old_id = next(p.id for p in cat.products.values() if "sr04" in p.id or "ultrasonic" in p.id)
+    e = Enrichment(
+        key=old_id,
+        canonical_name="HC-SR04 Ultrasonic Distance Sensor",
+        description="d",
+        tags=["sensor"],
+    )
+    cache = {"hc-sr04-ultrasonic-distance-sensor": e}
+    store.write_enrichment(cache, "test", datetime(2025, 9, 1, tzinfo=UTC))
+    cat.redirects[old_id] = "hc-sr04-ultrasonic-distance-sensor"
+    p = cat.products.pop(old_id)
+    p.id = "hc-sr04-ultrasonic-distance-sensor"
+    p.enriched = True
+    cat.products[p.id] = p
+    store.write_catalog(cat)
+
+    monkeypatch.setattr(ai_mod.settings, "ai_enabled", False)
+    points, products = await reindex(data, ai=False, embeddings=False)
+    cat2 = store.read_catalog()
+    assert products == 2 and points == 3
+    assert "hc-sr04-ultrasonic-distance-sensor" in cat2.products  # cache re-applied via redirect
+    assert cat2.products["hc-sr04-ultrasonic-distance-sensor"].enriched
+    assert cat2.resolve_id(old_id) == "hc-sr04-ultrasonic-distance-sensor"
+    assert all(v in cat2.products and k not in cat2.products for k, v in cat2.redirects.items())

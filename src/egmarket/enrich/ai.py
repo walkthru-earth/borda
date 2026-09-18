@@ -146,8 +146,10 @@ class Enricher:
         agent: Agent[BatchDeps, EnrichmentBatch] | None = None,
         model: Model | str | None = None,
         requests_per_minute: int | None = None,
+        key_aliases: dict[str, str] | None = None,
     ):
         self.store = store
+        self.key_aliases = key_aliases or {}  # product id -> cache key (e.g. via redirects)
         self.agent = agent or enrichment_agent
         self._model = model
         self.model_name = model if isinstance(model, str) else settings.ai_model
@@ -178,8 +180,9 @@ class Enricher:
         for p in catalog.sorted_products():
             if p.enriched:
                 continue
-            if p.id in self.cache:
-                self._apply(catalog, p, self.cache[p.id], report)
+            hit = self.cache.get(p.id) or self.cache.get(self.key_aliases.get(p.id, ""))
+            if hit is not None:
+                self._apply(catalog, p, hit, report)
                 report.cached += 1
             else:
                 pending.append(p)

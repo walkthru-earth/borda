@@ -51,10 +51,12 @@ jobs:
 
       # Page cache lets a re-run/retry within the same month reuse already fetched pages
       # (incremental scraping). It is never committed.
-      - name: Restore scraper page cache
+      - name: Restore scraper page cache + embedding model
         uses: actions/cache@v4
         with:
-          path: .cache/http
+          path: |
+            .cache/http
+            .cache/hf
           key: http-cache-${{ github.run_id }}
           restore-keys: |
             http-cache-
@@ -63,6 +65,8 @@ jobs:
         id: run
         env:
           HETZNER_INFERENCE_TOKEN: ${{ secrets.HETZNER_INFERENCE_TOKEN }}
+          EGMARKET_PROXY_URL: ${{ secrets.EGMARKET_PROXY_URL }} # optional: stores that block DC IPs
+          HF_HUB_CACHE: ${{ github.workspace }}/.cache/hf
           EGMARKET_AI_ENABLED: ${{ inputs.ai == false && 'false' || 'true' }}
         run: |
           set -o pipefail

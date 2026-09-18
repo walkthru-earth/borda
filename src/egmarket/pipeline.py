@@ -6,6 +6,7 @@ produced offers."""
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from collections import Counter
@@ -256,7 +257,133 @@ def rebuild_exports(data_dir: Path, *, embeddings: bool = True) -> tuple[int, in
     series_rows, stats_rows = build_series(store.read_offers(), catalog)
     store.write_series(series_rows)
     store.write_stats(stats_rows)
+    _refresh_manifest(store, catalog)
     return len(series_rows), len(stats_rows)
+
+
+async def reindex(data_dir: Path, *, ai: bool = False, embeddings: bool = True) -> tuple[int, int]:
+    """Rebuild the catalog from scratch by replaying every historical offer through the
+    current normalisation rules, then re-apply the enrichment cache (by product id) and
+    recompute exports. Use after changing dedupe rules / the Arabic glossary."""
+    store = ParquetStore(data_dir)
+    offers = store.read_offers()
+    old = store.read_catalog()
+    catalog = Catalog()
+    cols = offers.select(
+        [
+            "run_id",
+            "product_id",
+            "seller",
+            "raw_name",
+            "url",
+            "price",
+            "currency",
+            "availability",
+            "sku",
+            "category",
+            "image",
+        ]
+    ).to_pydict()
+    order = sorted(
+        range(offers.num_rows), key=lambda i: (cols["run_id"][i], cols["seller"][i], cols["url"][i])
+    )
+    seen: set[str] = set()
+    for i in order:
+        key = f"{cols['seller'][i]}:{cols['url'][i]}"
+        if key in seen:
+            continue  # first observation of a listing decides; later runs re-attach anyway
+        seen.add(key)
+        try:
+            raw = RawOffer(
+                seller=cols["seller"][i],
+                raw_name=cols["raw_name"][i],
+                url=cols["url"][i],
+                price=cols["price"][i],
+                currency=cols["currency"][i],
+                availability=cols["availability"][i],
+                sku=cols["sku"][i],
+                category=cols["category"][i],
+                image=cols["image"][i],
+            )
+        except Exception as exc:  # noqa: BLE001 - a bad historical row must not stop the reindex
+            log.debug("skip %s: %s", key, exc)
+            continue
+        catalog.resolve(raw, fuzzy_threshold=settings.fuzzy_threshold)
+    enricher = Enricher(store)
+    for start in old.redirects:  # first hop along the redirect chain that has a cache entry
+        cur, hops = start, 0
+        while cur in old.redirects and hops < 10:
+            cur, hops = old.redirects[cur], hops + 1
+            if cur in enricher.cache:
+                enricher.key_aliases[start] = cur
+                break
+    report = await enricher.enrich(catalog, limit=settings.ai_max_items_per_run if ai else 0)
+    log.info(
+        "reindex: %d products, enrichment cached=%d enriched=%d merged=%d",
+        len(catalog.products),
+        report.cached,
+        report.enriched,
+        report.merged,
+    )
+    store.write_catalog(catalog)
+    return rebuild_exports(data_dir, embeddings=embeddings)
+
+
+def _rebuild_redirects(old: Catalog, new: Catalog) -> dict[str, str]:
+    """Redirects for a replayed catalog, computed once ids are final:
+    every id that used to exist (product or redirect source) but does not now points to the
+    product that currently owns one of its listings. Self-redirects and dangling targets are
+    dropped."""
+    by_listing = {k: p.id for p in new.products.values() for k in p.listings}
+    redirects: dict[str, str] = {}
+
+    def target_for(old_id: str) -> str | None:
+        final = old.resolve_id(old_id)
+        if final in new.products:
+            return final
+        op = old.products.get(final)
+        if op is None:
+            return None
+        return next((by_listing[k] for k in op.listings if k in by_listing), None)
+
+    for old_id in [*old.products, *old.redirects]:
+        if old_id in new.products:
+            continue
+        if (t := target_for(old_id)) and t != old_id:
+            redirects[old_id] = t
+    for k, v in new.redirects.items():  # renames/merges made during this reindex
+        t = new.resolve_id(v)
+        if k not in new.products and t in new.products and t != k:
+            redirects[k] = t
+    return redirects
+
+
+def _refresh_manifest(store: ParquetStore, catalog: Catalog) -> None:
+    """Rewrite manifest.json file facts after a rebuild (runs list is preserved)."""
+    path = store.data_dir / "manifest.json"
+    prev_ts, prev_runs = _previous_manifest(path)
+    manifest = Manifest(
+        schema_version=SCHEMA_VERSION,
+        pipeline_version=__version__,
+        parquet_format=PARQUET_FORMAT,
+        generated_at=prev_ts or utcnow(),
+        products=len(catalog.products),
+        offers_total=store.read_offers(columns=["run_id"]).num_rows,
+        groups=dict(sorted(Counter(p.group or "other" for p in catalog.products.values()).items())),
+        files={k: FileInfo(**v) for k, v in sorted(store.written.items())},
+        runs=prev_runs,
+    )
+    path.write_text(manifest.model_dump_json(indent=1) + "\n")
+
+
+def _previous_manifest(path: Path) -> tuple[datetime | None, list[RunSummary]]:
+    """Read only the stable parts of an existing manifest (tolerates older schemas)."""
+    if not path.exists():
+        return None, []
+    raw = json.loads(path.read_text())
+    runs = [RunSummary.model_validate(r) for r in raw.get("runs", [])]
+    ts = datetime.fromisoformat(raw["generated_at"]) if raw.get("generated_at") else None
+    return ts, runs
 
 
 def _write_manifest(store: ParquetStore, run: Run, catalog: Catalog, new_products: int) -> None:

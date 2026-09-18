@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     request_timeout_s: float = 30.0
     request_delay_s: float = 0.6
     max_retries: int = 3
+    proxy_url: str | None = None  # e.g. http://user:pass@host:port – for stores that block CI IPs
     max_pages_per_store: int = 400
     http_cache_ttl_h: float = 20.0  # re-use fetched pages within a run window / retry
 
@@ -31,8 +32,8 @@ class Settings(BaseSettings):
     # Inference API; any `provider:model` string Pydantic AI understands also works.
     ai_model: str = "hetzner:Qwen/Qwen3.6-35B-A3B-FP8"
     ai_enabled: bool = True
-    ai_batch_size: int = 30
-    ai_max_items_per_run: int = 1500
+    ai_batch_size: int = 40
+    ai_max_items_per_run: int = 6000  # ~20 min at 8 req/min x 40 items
     ai_requests_per_minute: int = 8  # Hetzner limit is 10/min – keep headroom for retries
     hetzner_base_url: str = "https://inference.hetzner.com/api/v1"
     hetzner_token: str | None = Field(

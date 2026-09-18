@@ -38,6 +38,8 @@ class BaseScraper(ABC):
         self.store = store
         self.fetch = fetcher
         self.max_pages = max_pages
+        if (d := store.params.get("delay_s")) is not None:
+            fetcher.host_delay[store.base_url.host or ""] = float(d)
         self.pages = 0
         self.warnings: list[str] = []
 

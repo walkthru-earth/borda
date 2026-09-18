@@ -23,6 +23,7 @@ repos:
       - id: end-of-file-fixer
         exclude: ^data/
       - id: check-yaml
+        exclude: ^frontend/pnpm-lock\.yaml$ # multi-document lockfile
       - id: check-toml
       - id: check-json
         exclude: ^frontend/tsconfig.*\.json$ # tsconfig allows comments

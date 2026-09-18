@@ -213,22 +213,31 @@ def block_key(raw: str) -> str:
 
 
 # --------------------------------------------------------------------------- canonical rules
-# (pattern, canonical name, tags). First match wins; keep patterns specific.
-CANONICAL_RULES: list[tuple[re.Pattern[str], str, tuple[str, ...]]] = [
+# (pattern, canonical name, tags[, unless]). First match wins; `unless` is tested against
+# the whole cleaned name so accessories / chips / variants never collapse into the board.
+_BOARD_ACCESSORY = re.compile(
+    r"\b(shield|case|cable|kit|proto|bootloader|atmega|chip|programmed|sticker|holder|enclosure|"
+    r"box|cover|mount|acrylic|adapter|connector|screw|jumper|sensor|display|module|expansion|"
+    r"terminal|breakout|header|usb|power supply|clone kit)\b"
+)
+CANONICAL_RULES: list[tuple] = [
     (
-        re.compile(r"\barduino\s*uno\s*(r3|rev3)?\b(?!.*(shield|case|cable|kit|proto))"),
+        re.compile(r"\barduino\s*uno\s*(r3|rev3)?\b"),
         "Arduino Uno R3",
         ("arduino", "avr", "dev-board"),
+        re.compile(_BOARD_ACCESSORY.pattern + r"|\b(r4|wifi|minima|smd|q)\b"),
     ),
     (
-        re.compile(r"\barduino\s*mega\s*2560\b(?!.*(shield|case|kit|proto))"),
+        re.compile(r"\barduino\s*mega\s*2560\b"),
         "Arduino Mega 2560",
         ("arduino", "avr", "dev-board"),
+        re.compile(_BOARD_ACCESSORY.pattern + r"|\bpro\b"),
     ),
     (
-        re.compile(r"\barduino\s*nano\b(?!.*(every|33|shield|case|kit|expansion|terminal))"),
+        re.compile(r"\barduino\s*nano\b"),
         "Arduino Nano V3",
         ("arduino", "avr", "dev-board"),
+        re.compile(_BOARD_ACCESSORY.pattern + r"|\b(every|33|esp32|rp2040|ble|iot)\b"),
     ),
     (re.compile(r"\barduino\s*leonardo\b"), "Arduino Leonardo", ("arduino", "avr", "dev-board")),
     (re.compile(r"\barduino\s*pro\s*mini\b"), "Arduino Pro Mini", ("arduino", "avr", "dev-board")),
@@ -451,7 +460,10 @@ def has_arabic(s: str) -> bool:
 def canonical_rule(raw: str) -> tuple[str, tuple[str, ...]] | None:
     """Return (canonical_name, tags) when a hand-written rule recognises the product."""
     c = clean(raw)
-    for pat, name, tags in CANONICAL_RULES:
+    for pat, name, tags, *rest in CANONICAL_RULES:
+        unless = rest[0] if rest else None
+        if unless is not None and unless.search(c):
+            continue
         if m := pat.search(c):
             if "{0}" not in name:
                 return name, tags

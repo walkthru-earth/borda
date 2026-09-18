@@ -1,2 +1,5 @@
-minimumReleaseAgeExclude:
-  - hyparquet@1.31.1
+# pnpm 12 supply-chain policy: transformers.js pulls Node-only deps whose install scripts
+# the browser build never needs.
+allowBuilds:
+  onnxruntime-node: false
+  protobufjs: false

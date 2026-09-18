@@ -11,7 +11,7 @@ import sys
 import pyarrow.compute as pc
 
 from .config import settings
-from .pipeline import RunOptions, rebuild_exports, run_pipeline
+from .pipeline import RunOptions, rebuild_exports, reindex, run_pipeline
 from .scrapers import STORES
 from .storage import ParquetStore, build_index, search
 
@@ -38,6 +38,13 @@ def _p() -> argparse.ArgumentParser:
 
     rb = sub.add_parser("rebuild", help="rebuild groups/embeddings/series/stats without scraping")
     rb.add_argument("--no-embeddings", action="store_true")
+
+    ri = sub.add_parser(
+        "reindex",
+        help="replay all history through current dedupe rules (rule fixes become retroactive)",
+    )
+    ri.add_argument("--ai", action="store_true", help="also enrich products not in the LLM cache")
+    ri.add_argument("--no-embeddings", action="store_true")
 
     d = sub.add_parser("diff", help="compare the last two runs (new/removed products, price moves)")
     d.add_argument("--top", type=int, default=20)
@@ -91,6 +98,13 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "rebuild":
         points, products = rebuild_exports(settings.data, embeddings=not args.no_embeddings)
         print(f"rebuilt {points} series points for {products} products")
+        return 0
+
+    if args.cmd == "reindex":
+        points, products = asyncio.run(
+            reindex(settings.data, ai=args.ai, embeddings=not args.no_embeddings)
+        )
+        print(f"reindexed: {products} products, {points} series points")
         return 0
 
     if args.cmd == "diff":

@@ -6,6 +6,7 @@ Layout under `data/`:
   stats.parquet                                per-product price stats, sorted by product_id
   series.parquet                               chart points sorted by (product_id, ts)
   embeddings.parquet                           int8 sentence embeddings, sorted by product_id
+  redirects.parquet                            merged/renamed id -> surviving id
   offers/year=YYYY/month=MM/<run_id>.parquet   history rows, append-only, hive partitioned
   store_runs/year=YYYY/month=MM/<run_id>.parquet   scraper health per store per run
   enrichment.parquet                           LLM cache
@@ -133,6 +134,7 @@ STATS_SCHEMA = pa.schema(
         ("group", pa.string()),
     ]
 )
+REDIRECTS_SCHEMA = pa.schema([("old_id", pa.string()), ("new_id", pa.string())])
 EMBEDDINGS_SCHEMA = pa.schema(
     [
         ("product_id", pa.string()),
@@ -207,6 +209,7 @@ class ParquetStore:
         self.catalog_path = data_dir / "catalog.parquet"
         self.stats_path = data_dir / "stats.parquet"
         self.embeddings_path = data_dir / "embeddings.parquet"
+        self.redirects_path = data_dir / "redirects.parquet"
         self.enrichment_path = data_dir / "enrichment.parquet"
         self.written: dict[str, dict[str, Any]] = {}  # relative path -> file_info (manifest)
 
@@ -266,8 +269,11 @@ class ParquetStore:
         products: list[Product] = []
         redirects: dict[str, str] = {}
         meta = table.schema.metadata or {}
-        if b"redirects" in meta:
+        if b"redirects" in meta:  # legacy location (pre redirects.parquet)
             redirects = json.loads(meta[b"redirects"])
+        if self.redirects_path.exists():
+            t = pq.read_table(self.redirects_path).to_pydict()
+            redirects.update(zip(t["old_id"], t["new_id"], strict=True))
         for row in table.to_pylist():
             row["listings"] = json.loads(row.pop("listings") or "{}")
             row["extra_metadata"] = json.loads(row.pop("extra_metadata") or "{}")
@@ -283,17 +289,19 @@ class ParquetStore:
             }
             for p in catalog.sorted_products()
         ]
-        schema = CATALOG_SCHEMA.with_metadata(
-            {
-                **{k.decode(): v.decode() for k, v in (CATALOG_SCHEMA.metadata or {}).items()},
-                "redirects": json.dumps(dict(sorted(catalog.redirects.items()))),
-            }
+        self._write(
+            self.redirects_path,
+            pa.Table.from_pylist(
+                [{"old_id": k, "new_id": v} for k, v in sorted(catalog.redirects.items())],
+                schema=REDIRECTS_SCHEMA,
+            ),
+            sort_by=["old_id"],
         )
         return self._write(
             self.catalog_path,
-            pa.Table.from_pylist(rows, schema=schema),
+            pa.Table.from_pylist(rows, schema=CATALOG_SCHEMA),
             sort_by=["id"],
-            row_group_size=1024,
+            row_group_size=2048,
             bloom=["id"],
         )
 

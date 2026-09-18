@@ -25,6 +25,8 @@ STORES: list[Store] = [
         name="Circuits Electronics",
         base_url="https://circuits-elec.com",
         platform="shopify",
+        params={"delay_s": 2.0},
+        note="Shopify rate-limits products.json aggressively (429 after ~4 pages at 0.6s).",
     ),
     Store(
         slug="uge-one",
@@ -38,6 +40,7 @@ STORES: list[Store] = [
         name="Micro Ohm Electronics",
         base_url="https://microohm-eg.com",
         platform="woocommerce",
+        note="403 from GitHub-hosted runner IPs (works from Egypt/residential); set EGMARKET_PROXY_URL.",
     ),
     Store(
         slug="makerselectronics",
@@ -63,6 +66,7 @@ STORES: list[Store] = [
         base_url="https://ic-hat.com/en",
         platform="prestashop",
         params={"listing": "2-home"},
+        note="403 from GitHub-hosted runner IPs (works from Egypt/residential); set EGMARKET_PROXY_URL.",
     ),
     Store(
         slug="ram-e-shop",
