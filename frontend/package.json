@@ -5,10 +5,12 @@
   "type": "module",
   "scripts": {
     "dev": "vite dev",
-    "build": "vite build",
+    "build": "node scripts/sync-data.mjs ../data && vite build && node scripts/generate-seo.mjs",
     "preview": "vite preview",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
-    "sync-data": "node scripts/sync-data.mjs"
+    "sync-data": "node scripts/sync-data.mjs",
+    "test": "node --experimental-strip-types --test tests/*.test.mjs",
+    "seo": "node scripts/generate-seo.mjs"
   },
   "devDependencies": {
     "@sveltejs/adapter-static": "^3.0.10",
@@ -20,7 +22,9 @@
     "vite": "^8.3.0"
   },
   "dependencies": {
+    "@fontsource/cairo": "^5.3.0",
     "@huggingface/transformers": "^4.3.0",
+    "@lucide/svelte": "^1.47.0",
     "hyparquet": "1.31.0",
     "hyparquet-compressors": "^1.1.2"
   },

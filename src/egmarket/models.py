@@ -164,12 +164,15 @@ class Product(Base):
 
     id: Slug
     canonical_name: str = Field(min_length=2, max_length=200)
+    canonical_name_ar: str | None = Field(default=None, max_length=240)
     raw_names: list[str] = Field(
         default_factory=list, description="local/seller names (searchable)"
     )
     tags: list[str] = Field(default_factory=list)
     description: str | None = Field(default=None, max_length=900)
+    description_ar: str | None = Field(default=None, max_length=1200)
     specs: list[str] = Field(default_factory=list, description='"Key: value" highlights')
+    specs_ar: list[str] = Field(default_factory=list, description="Arabic spec labels, same values")
     mpn: str | None = Field(default=None, max_length=60, description="manufacturer part number")
     datasheet_url: HttpUrl | None = Field(default=None, description="only when a seller links one")
     category: str | None = None
@@ -190,7 +193,7 @@ class Product(Base):
         return sorted(set(v))
 
 
-ENRICHMENT_VERSION = 2  # bump when the prompt/schema changes enough to be worth a refresh
+ENRICHMENT_VERSION = 3  # bump when the prompt/schema changes enough to be worth a refresh
 
 
 class Enrichment(Base):
@@ -201,6 +204,21 @@ class Enrichment(Base):
         max_length=120,
         description="Manufacturer's original product name (e.g. 'ESP32-WROOM-32 DevKit V1'), "
         "no marketing words, no seller names, English",
+    )
+    canonical_name_ar: str | None = Field(
+        default=None,
+        max_length=240,
+        description="Arabic translation of canonical_name; preserve brands and part numbers verbatim",
+    )
+    description_ar: str | None = Field(
+        default=None,
+        max_length=1200,
+        description="Faithful Arabic translation of description; preserve numbers, units and brands",
+    )
+    specs_ar: list[Annotated[str, StringConstraints(max_length=100)]] = Field(
+        default_factory=list,
+        max_length=6,
+        description="Arabic translations of specs in the same order; keep each value and unit verbatim",
     )
     description: str = Field(
         max_length=600,
@@ -228,7 +246,7 @@ class Enrichment(Base):
     def _norm_tags(cls, v: list[str]) -> list[str]:
         return sorted({re.sub(r"[^a-z0-9+.-]+", "-", t).strip("-") for t in v if t.strip()})
 
-    @field_validator("mpn", "brand", mode="before")
+    @field_validator("mpn", "brand", "canonical_name_ar", "description_ar", mode="before")
     @classmethod
     def _placeholder_to_none(cls, v: Any) -> Any:
         if isinstance(v, str) and v.strip().lower() in {

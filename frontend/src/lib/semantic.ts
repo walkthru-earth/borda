@@ -16,37 +16,54 @@ type Extractor = (text: string, opts: { pooling: 'mean'; normalize: boolean }) =
 
 let extractorPromise: Promise<Extractor> | null = null;
 let matrixPromise: ReturnType<typeof loadEmbeddings> | null = null;
+let encoderLoaded = false;
+let matrixLoaded = false;
 
 export type Progress = { status: string; progress?: number; file?: string };
 
 export function semanticReady(): boolean {
-	return extractorPromise !== null && matrixPromise !== null;
+	return encoderLoaded && matrixLoaded;
 }
 
 export async function loadEncoder(onProgress?: (p: Progress) => void): Promise<Extractor> {
 	extractorPromise ??= (async () => {
 		const tf = await import('@huggingface/transformers');
-		const webgpu = typeof navigator !== 'undefined' && 'gpu' in navigator;
-		const pipe = await tf.pipeline('feature-extraction', MODEL_ID, {
-			dtype: 'q8',
-			device: webgpu ? 'webgpu' : 'wasm',
-			progress_callback: onProgress as never
+		// The model is remote; avoid probing a nonexistent local /models route.
+		tf.env.allowLocalModels = false;
+		const create = async (device: 'webgpu' | 'wasm') => tf.pipeline('feature-extraction', MODEL_ID, {
+			dtype: 'q8', device, progress_callback: onProgress as never
 		});
+		let pipe;
+		if (typeof navigator !== 'undefined' && 'gpu' in navigator) {
+			try { pipe = await create('webgpu'); }
+			catch { pipe = await create('wasm'); }
+		} else {
+			pipe = await create('wasm');
+		}
+		encoderLoaded = true;
 		return pipe as unknown as Extractor;
-	})();
+	})().catch((error) => { extractorPromise = null; encoderLoaded = false; throw error; });
 	return extractorPromise;
 }
 
 export function loadMatrix() {
-	matrixPromise ??= loadEmbeddings();
+	matrixPromise ??= loadEmbeddings().then((matrix) => {
+		matrixLoaded = true;
+		return matrix;
+	}).catch((error) => { matrixPromise = null; matrixLoaded = false; throw error; });
 	return matrixPromise;
 }
 
 export interface Hit { id: string; score: number }
 
 export async function semanticSearch(query: string, k = 60, onProgress?: (p: Progress) => void): Promise<Hit[]> {
+	if (!query.trim() || !(k > 0)) return [];
 	const [extract, { ids, dim, vectors }] = await Promise.all([loadEncoder(onProgress), loadMatrix()]);
+	if (!ids.length) return [];
 	const out = await extract(query, { pooling: 'mean', normalize: true });
+	if (out.data.length !== dim || out.data.some((value) => !Number.isFinite(value))) {
+		throw new Error('AI search returned an incompatible query vector.');
+	}
 	const q = new Int8Array(dim);
 	for (let d = 0; d < dim; d++) q[d] = Math.max(-127, Math.min(127, Math.round(out.data[d] * 127)));
 
@@ -64,7 +81,8 @@ export async function semanticSearch(query: string, k = 60, onProgress?: (p: Pro
 /** Reciprocal-rank fusion of lexical and semantic rankings. */
 export function fuse(lexical: string[], semantic: Hit[], k = 60): string[] {
 	const score = new Map<string, number>();
-	lexical.forEach((id, r) => score.set(id, (score.get(id) ?? 0) + 1 / (k + r)));
-	semantic.forEach((h, r) => score.set(h.id, (score.get(h.id) ?? 0) + 1 / (k + r)));
+	const constant = Number.isFinite(k) ? Math.max(0, k) : 60;
+	[...new Set(lexical)].forEach((id, r) => score.set(id, (score.get(id) ?? 0) + 1 / (constant + r + 1)));
+	[...new Set(semantic.map((hit) => hit.id))].forEach((id, r) => score.set(id, (score.get(id) ?? 0) + 1 / (constant + r + 1)));
 	return [...score.entries()].sort((a, b) => b[1] - a[1]).map(([id]) => id);
 }

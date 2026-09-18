@@ -155,6 +155,7 @@ async def test_legacy_cache_rows_are_refreshed_once(tmp_path, make_offer):
         key=pid, canonical_name="TP4056 Li-ion Charger Module", description="old", tags=["power"]
     )
     legacy.version = 1
+    cat.products[pid].enriched = True  # persisted products must also refresh stale cache rows
     store.write_enrichment(
         {pid: legacy},
         "old-model",
@@ -209,3 +210,223 @@ async def test_legacy_cache_rows_are_refreshed_once(tmp_path, make_offer):
         )
     )
     assert report2.stale == 0 and report2.cached == 1  # second time: served from cache
+
+
+async def test_output_validator_retries_duplicate_keys():
+    calls = 0
+
+    def respond(messages, info):
+        nonlocal calls
+        calls += 1
+        item = {"key": "a", "canonical_name": "Part", "description": "d", "tags": []}
+        items = [item, item] if calls == 1 else [item]
+        return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, {"items": items})])
+
+    result = await enrichment_agent.run(
+        '{"key":"a"}',
+        model=FunctionModel(respond),
+        deps=BatchDeps(expected_keys=frozenset({"a"})),
+    )
+    assert calls == 2 and len(result.output.items) == 1
+
+
+async def test_arabic_translations_are_cached_and_preserve_identifiers(tmp_path, make_offer):
+    store = ParquetStore(tmp_path)
+    catalog = Catalog()
+    pid, _ = catalog.resolve(make_offer("s1", "ESP32 DevKit V1", 300), fuzzy_threshold=93)
+    calls = 0
+
+    def respond(messages, info):
+        nonlocal calls
+        calls += 1
+        return ModelResponse(
+            parts=[
+                ToolCallPart(
+                    info.output_tools[0].name,
+                    {
+                        "items": [
+                            {
+                                "key": pid,
+                                "canonical_name": "ESP32 DevKit V1",
+                                "canonical_name_ar": "لوحة تطوير ESP32 DevKit V1",
+                                "description": "ESP32 development board operating at 3.3V.",
+                                "description_ar": "لوحة تطوير ESP32 تعمل بجهد 3.3V.",
+                                "specs": ["Voltage: 3.3V"],
+                                "specs_ar": ["الجهد: 3.3V"],
+                                "mpn": "ESP32",
+                                "tags": ["esp32"],
+                            }
+                        ]
+                    },
+                )
+            ]
+        )
+
+    enricher = Enricher(store, model=FunctionModel(respond), requests_per_minute=10_000)
+    report = await enricher.enrich(catalog)
+    assert report.enriched == 1
+    product = catalog.products[catalog.resolve_id(pid)]
+    assert product.canonical_name_ar == "لوحة تطوير ESP32 DevKit V1"
+    assert product.description_ar == "لوحة تطوير ESP32 تعمل بجهد 3.3V."
+    assert product.specs_ar == ["الجهد: 3.3V"]
+    store.write_catalog(catalog)
+    restored = store.read_catalog().products[product.id]
+    assert restored.canonical_name_ar == product.canonical_name_ar
+    assert restored.description_ar == product.description_ar
+    assert restored.specs_ar == product.specs_ar
+    assert store.read_enrichment()[product.id].specs_ar == product.specs_ar
+    # Cached translations survive a new catalog with no translated fields set.
+    fresh = Catalog.from_products(
+        [
+            product.model_copy(
+                update={
+                    "enriched": False,
+                    "canonical_name_ar": None,
+                    "description_ar": None,
+                    "specs_ar": [],
+                }
+            )
+        ]
+    )
+    cached = await Enricher(store, model=FunctionModel(respond)).enrich(fresh)
+    assert calls == 1 and cached.cached == 1
+    assert fresh.products[product.id].canonical_name_ar == product.canonical_name_ar
+
+
+async def test_arabic_specs_must_correspond_to_english_specs():
+    calls = 0
+
+    def respond(messages, info):
+        nonlocal calls
+        calls += 1
+        item = {
+            "key": "a",
+            "canonical_name": "Part",
+            "description": "Description",
+            "tags": [],
+            "specs": ["Voltage: 3.3V"],
+            "specs_ar": ["الجهد: 3.3V", "التيار: 1A"] if calls == 1 else ["الجهد: 3.3V"],
+        }
+        return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, {"items": [item]})])
+
+    result = await enrichment_agent.run(
+        '{"key":"a"}',
+        model=FunctionModel(respond),
+        deps=BatchDeps(expected_keys=frozenset({"a"})),
+    )
+    assert calls == 2 and result.output.items[0].specs_ar == ["الجهد: 3.3V"]
+
+
+def test_legacy_parquet_without_arabic_columns_still_loads(tmp_path):
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    from egmarket.models import Product
+
+    store = ParquetStore(tmp_path)
+    catalog = Catalog.from_products([Product(id="part", canonical_name="Part")])
+    store.write_catalog(catalog)
+    table = pq.read_table(store.catalog_path).drop(
+        ["canonical_name_ar", "description_ar", "specs_ar"]
+    )
+    pq.write_table(table, store.catalog_path)
+    product = store.read_catalog().products["part"]
+    assert product.canonical_name_ar is None and product.description_ar is None
+    assert product.specs_ar == []
+    pq.write_table(
+        pa.Table.from_pylist(
+            [
+                {
+                    "key": "part",
+                    "canonical_name": "Part",
+                    "description": "English description",
+                    "tags": [],
+                    "version": 2,
+                }
+            ]
+        ),
+        store.enrichment_path,
+    )
+    cached = store.read_enrichment()["part"]
+    assert cached.version == 2 and cached.canonical_name_ar is None and cached.specs_ar == []
+
+
+def test_newer_checkpoint_translations_override_older_persisted_cache(tmp_path):
+    from egmarket.models import ENRICHMENT_VERSION, utcnow
+
+    store = ParquetStore(tmp_path / "data")
+    legacy = Enrichment(key="part", canonical_name="Part", description="Old", tags=[])
+    legacy.version = 2
+    store.write_enrichment({"part": legacy}, "old", utcnow())
+    mirror = ParquetStore(tmp_path / "checkpoint")
+    translated = legacy.model_copy(
+        update={"version": ENRICHMENT_VERSION, "canonical_name_ar": "قطعة"}
+    )
+    mirror.write_enrichment({"part": translated}, "new", utcnow())
+    enricher = Enricher(store, mirror_path=mirror.enrichment_path)
+    assert enricher.cache["part"].canonical_name_ar == "قطعة"
+    assert enricher.cache["part"].version == ENRICHMENT_VERSION
+
+
+async def test_ai_cannot_merge_unpopulated_pcb_into_assembled_board(tmp_path, make_offer):
+    store = ParquetStore(tmp_path)
+    catalog = Catalog()
+    assembled, _ = catalog.resolve(make_offer("s1", "Arduino Uno R3", 300), fuzzy_threshold=93)
+    pcb, _ = catalog.resolve(make_offer("s2", "Arduino Uno R3 PCB", 20), fuzzy_threshold=93)
+    assert assembled != pcb
+    original_pcb = catalog.products[pcb].model_copy(deep=True)
+    report = await Enricher(
+        store,
+        model=_fake_llm({assembled: "Arduino Uno R3", pcb: "Arduino Uno R3"}),
+        requests_per_minute=10_000,
+    ).enrich(catalog)
+    assert len(catalog.products) == 2 and report.merged == 0
+    assert catalog.products[pcb] == original_pcb
+    assert pcb not in store.read_enrichment()  # never persist the contradictory new answer
+
+
+async def test_old_cached_ai_name_cannot_undo_accessory_split(tmp_path, make_offer):
+    from egmarket.models import utcnow
+
+    store = ParquetStore(tmp_path)
+    catalog = Catalog()
+    assembled, _ = catalog.resolve(make_offer("s1", "Arduino Uno R3", 300), fuzzy_threshold=93)
+    pcb, _ = catalog.resolve(make_offer("s2", "Arduino Uno R3 PCB", 20), fuzzy_threshold=93)
+    wrong = Enrichment(key=pcb, canonical_name="Arduino Uno R3", description="Wrong", tags=[])
+    wrong.version = 2
+    store.write_enrichment({pcb: wrong}, "old", utcnow())
+    report = await Enricher(store).enrich(catalog, limit=0)
+    assert report.requested == 0 and report.merged == 0
+    assert assembled in catalog.products and pcb in catalog.products
+    assert catalog.products[pcb].canonical_name.endswith("PCB")
+    assert catalog.products[pcb].description is None
+
+
+@pytest.mark.parametrize(
+    ("names", "proposed"),
+    [
+        (("Raspberry Pi 4 4GB", "Raspberry Pi 4 8GB"), "Raspberry Pi 4 4GB"),
+        (
+            ("ESP32-S3 Development Board", "ESP32-C3 Development Board"),
+            "ESP32-S3 Development Board",
+        ),
+        (("Widget Board 30 pin", "Widget Board 38 pin"), "Widget Development Board"),
+        (("Arduino Uno R3", "Arduino Uno R4"), "Arduino Uno R3"),
+        (("Sensor Kit", "Sensor Module"), "Sensor Module"),
+    ],
+)
+async def test_ai_cannot_merge_conflicting_explicit_variants(tmp_path, names, proposed):
+    from egmarket.models import Product
+
+    catalog = Catalog.from_products(
+        [
+            Product(id=f"part-{i}", canonical_name=name, raw_names=[name])
+            for i, name in enumerate(names)
+        ]
+    )
+    report = await Enricher(
+        ParquetStore(tmp_path),
+        model=_fake_llm({"part-0": proposed, "part-1": proposed}),
+        requests_per_minute=10_000,
+    ).enrich(catalog)
+    assert len(catalog.products) == 2 and report.merged == 0

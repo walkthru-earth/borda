@@ -1,48 +1,28 @@
 <script lang="ts">
-	import { base } from '$app/paths';
-	import { catalog, fmtPrice, groupIcon, groupLabel } from '$lib/data.svelte';
-	import type { Product } from '$lib/parquet';
-
-	let { product }: { product: Product } = $props();
-	let s = $derived(catalog.stats.get(product.id));
-	let aka = $derived(product.raw_names.filter((n) => n.toLowerCase() !== product.canonical_name.toLowerCase()));
-	let drop = $derived(s && s.latest_min != null && s.median != null && s.median > 0 ? Math.round(((s.latest_min - s.median) / s.median) * 100) : null);
+ import { base } from '$app/paths';
+ import { ArrowUpRight, Store, ArrowRight } from '@lucide/svelte';
+ import { locale, tr, groupName as groupLabel } from './i18n.svelte';
+ import { catalog, fmtPrice } from '$lib/data.svelte';
+ import { matchingPrice, matchingOffers, type ProductFilters } from '$lib/search';
+ import CategoryIcon from './CategoryIcon.svelte';
+ import type { Product } from '$lib/parquet';
+ let { product, offerFilters = {} }: { product:Product; offerFilters?:ProductFilters } = $props();
+ let name = $derived(locale.language === 'ar' && product.canonical_name_ar ? product.canonical_name_ar : product.canonical_name);
+ let stats = $derived(catalog.stats.get(product.id));
+ let price = $derived(matchingPrice(stats,offerFilters));
+ let offers = $derived(matchingOffers(stats,offerFilters));
+ let stocked = $derived(stats?.current_offers !== undefined ? offers.some(o => o.availability==='in_stock') : (stats?.in_stock_sellers ?? 0)>0);
+ let availability = $derived(stocked ? tr('In stock','متوفر') : offers.some(o => o.availability==='preorder') ? tr('Preorder','طلب مسبق') : offers.length && offers.every(o => o.availability==='out_of_stock') ? tr('Out of stock','غير متوفر') : tr('Check availability','راجع التوفر'));
+ let currentSellers = $derived(stats?.current_offers !== undefined ? new Set(offers.map(o => o.seller)).size : product.sellers.length);
+ let imageFailed = $state(false);
+ $effect(() => { void product.image; imageFailed = false; });
+ let src = $derived(product.image && /^https?:\/\//i.test(product.image) ? product.image : null);
 </script>
-
-<a class="card item" href="{base}/product/{product.id}">
-	<div class="img">
-		{#if product.image}
-			<img src={product.image} alt="" loading="lazy" decoding="async" />
-		{:else}
-			<span class="ph">{groupIcon(product.group)}</span>
-		{/if}
-		{#if s}
-			<span class="badge {s.in_stock_sellers ? 'ok' : 'bad'} stock">{s.in_stock_sellers ? `${s.in_stock_sellers} in stock` : 'out of stock'}</span>
-		{/if}
-	</div>
-	<div class="body">
-		<div class="muted small group">{groupIcon(product.group)} {groupLabel(product.group)}{product.brand ? ` · ${product.brand}` : ''}</div>
-		<h3 class="name">{product.canonical_name}</h3>
-		{#if aka.length}<div class="muted small aka" dir="auto">aka {aka[0]}{aka.length > 1 ? ` +${aka.length - 1}` : ''}</div>{/if}
-		<div class="price-row">
-			<strong class="price">{fmtPrice(s?.latest_min, s?.currency)}</strong>
-			{#if drop != null && Math.abs(drop) >= 5}<span class="badge {drop < 0 ? 'ok' : 'bad'}">{drop > 0 ? '+' : ''}{drop}% vs median</span>{/if}
-		</div>
-		<div class="muted small">{product.sellers.length} seller{product.sellers.length === 1 ? '' : 's'}{s?.min != null && s.max != null && s.min !== s.max ? ` · ${fmtPrice(s.min, '')}–${fmtPrice(s.max, s.currency)}` : ''}</div>
-	</div>
+<a class="card item" href="{base}/product/{encodeURIComponent(product.id)}/" aria-label="{name}, {price != null ? fmtPrice(price,'EGP') : tr('price unavailable','السعر غير متاح')}, {tr('compare offers','قارن العروض')}">
+ <div class="product-media"><span class="part-category">{groupLabel(product.group)}</span>{#if src && !imageFailed}<img src={src} alt="" loading="lazy" decoding="async" onerror={() => imageFailed = true}/>{:else}<div class="placeholder"><CategoryIcon group={product.group} size={56}/><span>{product.brand || 'COMPONENT'}</span></div>{/if}<span class="image-arrow"><ArrowUpRight size={16}/></span></div>
+ <div class="body"><div class="product-brand">{product.brand || groupLabel(product.group)}</div><h3 dir="auto">{name}</h3><div class="availability" class:stocked><span></span>{availability}</div><div class="pricing"><span class="price-label">{offerFilters.inStock ? tr('Lowest in-stock price','أقل سعر متوفر') : offerFilters.seller ? tr('Selected store price','السعر في المحل المحدد') : tr('Lowest listed price','أقل سعر مسجل')}</span><div class="price">{#if price != null}<span class="currency">{tr('EGP','ج.م')}</span><strong>{fmtPrice(price,'').trim()}</strong>{:else}<strong class="unpriced">{tr('Check with seller','راجع المحل')}</strong>{/if}</div></div><div class="card-bottom"><span><Store size={13}/>{currentSellers || product.sellers.length} {currentSellers===1 || (!currentSellers && product.sellers.length===1) ? tr('store','محل') : tr('stores','محلات')}</span><span class="compare">{tr('Compare','قارن')}<ArrowRight size={13}/></span></div></div>
 </a>
-
 <style>
-	.item { display: flex; flex-direction: column; overflow: hidden; transition: transform 0.15s, box-shadow 0.15s; }
-	@media (hover: hover) { .item:hover { transform: translateY(-2px); box-shadow: 0 12px 30px -18px rgb(15 23 42 / 0.5); } }
-	.img { position: relative; aspect-ratio: 4 / 3; background: white; display: grid; place-items: center; border-bottom: 1px solid var(--line); }
-	.img img { width: 100%; height: 100%; object-fit: contain; padding: 0.5rem; }
-	.ph { font-size: 2.4rem; opacity: 0.5; }
-	.stock { position: absolute; left: 0.5rem; bottom: 0.5rem; }
-	.body { padding: 0.6rem 0.75rem 0.75rem; display: flex; flex-direction: column; gap: 0.2rem; }
-	.name { font-size: 0.95rem; font-weight: 600; display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-	.aka { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-	.price-row { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.15rem; }
-	.price { font-size: 1.05rem; font-variant-numeric: tabular-nums; }
-	@media (max-width: 480px) { .body { padding: 0.5rem; } .name { font-size: 0.85rem; } .group { display: none; } }
+ .item { display:flex; flex-direction:column; overflow:hidden; transition:transform .18s,border-color .18s,box-shadow .18s; border-radius:12px; box-shadow:0 2px 4px #172b3a02; }.item:hover { border-color:#9fcabe; box-shadow:0 8px 24px #173e3510; transform:translateY(-3px); }.product-media { position:relative; height:174px; display:grid; place-items:center; background:#fff; margin:8px 8px 0; border-radius:8px; overflow:hidden; }.product-media img { position:absolute; inset:0; width:100%; height:100%; padding:4px; object-fit:contain; object-position:center; }.part-category { position:absolute; top:5px; inset-inline-start:5px; z-index:1; background:#f4f6f6ee; color:#657b72; border-radius:4px; padding:3px 6px; font-size:8px; font-weight:500; }.image-arrow { position:absolute; bottom:8px; inset-inline-end:8px; color:#8d9a96; opacity:0; transition:opacity .2s; }.item:hover .image-arrow { opacity:1; }.placeholder { color:#94b3a7; display:flex; align-items:center; flex-direction:column; justify-content:center; gap:12px; background:radial-gradient(circle,#edf5f0,white 70%); width:100%; height:100%; }.placeholder span { color:#97a69f; font-size:8px; letter-spacing:2px; }.body { padding:15px 16px 0; display:flex; flex-direction:column; flex:1; }.product-brand { color:#8b969e; font-size:8px; letter-spacing:1.2px; text-transform:uppercase; margin-bottom:7px; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }.body h3 { font-size:12px; line-height:1.5; font-weight:600; display:-webkit-box; -webkit-line-clamp:2; line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; min-height:36px; overflow-wrap:anywhere; }.availability { display:flex; align-items:center; gap:5px; font-size:9px; color:#8c7765; margin-top:8px; }.availability>span { width:5px; height:5px; border-radius:50%; background:#b69c83; }.availability.stocked { color:#45835f; }.availability.stocked>span { background:#4a9468; }.pricing { margin-top:14px; margin-bottom:14px; }.price-label { font-size:9px; color:#8c969e; }.price { display:flex; align-items:baseline; gap:5px; margin-top:1px; }.price strong { font-size:23px; letter-spacing:-.7px; font-weight:650; font-variant-numeric:tabular-nums; }.currency { font-size:10px; color:var(--muted); }.price strong.unpriced { font-size:15px; letter-spacing:0; }.card-bottom { display:flex; justify-content:space-between; align-items:center; gap:6px; border-top:1px solid #edf0f2; padding:11px 0; font-size:9px; color:#809088; margin-top:auto; }.card-bottom>span { display:flex; align-items:center; gap:5px; }.card-bottom .compare { font-weight:600; color:var(--accent); }
+ @media(max-width:600px) { .product-media { height:140px; margin:5px 5px 0; }.product-media img { padding:3px; }.body { padding:12px 11px 0; }.body h3 { font-size:11px; min-height:33px; }.price strong { font-size:21px; }.card-bottom { font-size:8px; }.part-category { font-size:7px; }.pricing { margin-top:10px; margin-bottom:10px; }.availability { font-size:8px; } }
 </style>

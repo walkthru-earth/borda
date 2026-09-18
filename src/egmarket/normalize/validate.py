@@ -25,7 +25,7 @@ def flag_offers(
     has a single seller this run)."""
     by_product: dict[str, list[Decimal]] = defaultdict(list)
     for o in offers:
-        if o.price is not None:
+        if o.price is not None and o.currency == "EGP":
             by_product[o.product_id].append(o.price)
     if reference_prices:
         for pid, hist in reference_prices.items():
@@ -38,7 +38,7 @@ def flag_offers(
             flags.append("missing_price")
         elif o.price < Decimal("0.05"):
             flags.append("implausible_price")
-        else:
+        elif o.currency == "EGP":
             prices = by_product[o.product_id]
             if len(prices) >= 3:
                 med = median(prices)

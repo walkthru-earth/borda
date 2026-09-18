@@ -15,6 +15,7 @@ import hashlib
 import re
 from collections import defaultdict
 from dataclasses import dataclass, field
+from urllib.parse import urlparse
 
 from rapidfuzz import fuzz
 
@@ -49,6 +50,7 @@ class Catalog:
     new_ids: set[str] = field(default_factory=set)  # created in this run (not persisted yet)
     _blocks: dict[str, set[str]] = field(default_factory=lambda: defaultdict(set))
     _keys: dict[str, str] = field(default_factory=dict)  # id -> match_key(canonical)
+    _listings: dict[str, str] = field(default_factory=dict)
 
     @classmethod
     def from_products(
@@ -67,12 +69,17 @@ class Catalog:
             pid = self.redirects[pid]
         return pid
 
+    def resolve_listing(self, pid: str, seller: str, url: str) -> str:
+        """Listing ownership takes priority after a historical product is split."""
+        return self.resolve_id(self._listings.get(f"{seller}:{urlparse(url).path}", pid))
+
     def _register(self, p: Product) -> None:
         self.products[p.id] = p
         for rn in [p.canonical_name, *p.raw_names]:
             self.aliases.setdefault(names.clean(rn), p.id)
             self._blocks[names.block_key(rn)].add(p.id)
         self._keys[p.id] = names.match_key(p.canonical_name)
+        self._listings.update({key: p.id for key in p.listings})
 
     def unique_id(self, base: str, key: str) -> str:
         if base not in self.products and base not in self.redirects:
@@ -102,8 +109,11 @@ class Catalog:
     def _fuzzy(self, raw: str, threshold: int) -> str | None:
         key = names.match_key(raw)
         sig = names.numeric_signature(raw)
+        accessories = names.accessory_signature(raw)
         best, best_score = None, 0.0
         for pid in self._blocks.get(names.block_key(raw), ()):
+            if names.accessory_signature(self.products[pid].canonical_name) != accessories:
+                continue
             if names.numeric_signature(self.products[pid].canonical_name) != sig:
                 continue
             score = fuzz.token_sort_ratio(key, self._keys[pid])
@@ -162,6 +172,7 @@ class Catalog:
         if offer.seller not in p.sellers:
             p.sellers = [*p.sellers, offer.seller]
         p.listings = {**p.listings, offer.listing_key: str(offer.url)}
+        self._listings[offer.listing_key] = pid
         if not p.brand and offer.brand:
             p.brand = offer.brand
         if not p.category and offer.category:
@@ -189,6 +200,9 @@ class Catalog:
         keep.tags = [*keep.tags, *drop.tags]
         keep.listings = {**drop.listings, **keep.listings}
         keep.description = keep.description or drop.description
+        keep.canonical_name_ar = keep.canonical_name_ar or drop.canonical_name_ar
+        keep.description_ar = keep.description_ar or drop.description_ar
+        keep.specs_ar = keep.specs_ar or drop.specs_ar
         keep.image = keep.image or drop.image
         keep.datasheet_url = keep.datasheet_url or drop.datasheet_url
         keep.mpn = keep.mpn or drop.mpn

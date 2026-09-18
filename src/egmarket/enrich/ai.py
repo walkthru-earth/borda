@@ -4,7 +4,7 @@ same thing. Local (Egyptian) spellings are never lost: they stay in `Product.raw
 
 Token/cost discipline:
 * one structured (tool-call) request per batch of N products, compact JSON-lines input
-* results cached in `data/enrichment.parquet` by product id – an item is sent at most once
+* results cached in `data/enrichment.parquet` by product id and enrichment version
 * an `output_validator` makes the model retry when it forgets/invents keys
 * Qwen "thinking" is disabled (`chat_template_kwargs.enable_thinking=false`) – it would
   otherwise spend the whole output budget on hidden reasoning
@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import shutil
 import time
 from dataclasses import dataclass, field
@@ -45,11 +46,26 @@ For every input item return exactly one output item with the same `key`.
   words, no quantities/prices. Prefer the well-known part/model number
   (e.g. "ESP32-WROOM-32 DevKit V1", "HC-SR04 Ultrasonic Sensor", "LM2596 Buck Converter Module").
   Two listings of the same physical product MUST get an identical canonical_name.
+  Preserve identity-changing details: chipset/model revision, memory capacity, pin count,
+  package, voltage/current rating and included accessories. Different capacities, chipsets
+  or pin variants are separate products, even when sellers abbreviate the shared family.
+  Never rename an unpopulated/bare PCB as an assembled working board, a shield/case/adapter
+  as the board it fits, a kit as one component, or an accessory sold without a module as
+  including that module. Keep PCB, kit and accessory qualifiers in the official name.
+  When the source does not establish equivalence, retain the distinguishing seller wording
+  instead of guessing that two listings are interchangeable.
 - description: 2-3 technical sentences – what it is, what it is used for, key electrical
   specs (voltage, interface, range, current…). Use the seller text (`desc`) as a source but
   rewrite it: neutral, no marketing, no seller names, no prices, English.
 - specs: up to 6 "Key: value" highlights actually supported by the name/seller text; omit
   guesses.
+- canonical_name_ar, description_ar, specs_ar: provide faithful, clear Arabic translations
+  of the English fields for Egyptian makers. Translate technical prose and spec labels,
+  preserve brand names, model/part numbers (e.g. ESP32-WROOM-32, Arduino), numeric values,
+  symbols and unit spellings (e.g. 3.3V, 1A, I2C) exactly as written in English. Do not
+  transliterate identifiers, convert units, change specs, add claims or include HTML.
+  Keep specs_ar aligned one-to-one and in the same order as specs; use [] when specs is [].
+  Use null only when a faithful Arabic name or description cannot be supplied.
 - mpn: manufacturer part number when identifiable (e.g. "ESP32-WROOM-32", "L298N"), else null.
 - tags: up to 8 lowercase tags for search (family, interface, function, brand).
 - brand: manufacturer if clearly known, else null.
@@ -94,11 +110,17 @@ async def _keys_match(ctx: RunContext[BatchDeps], out: EnrichmentBatch) -> Enric
     got = {e.key for e in out.items}
     missing = ctx.deps.expected_keys - got
     extra = got - ctx.deps.expected_keys
-    if missing or extra:
+    duplicates = len(out.items) != len(got)
+    if missing or extra or duplicates:
         raise ModelRetry(
             f"Return one item per input key. Missing: {sorted(missing)[:10]}; "
-            f"unexpected: {sorted(extra)[:10]}."
+            f"unexpected: {sorted(extra)[:10]}; duplicate keys: {duplicates}."
         )
+    for item in out.items:
+        if item.specs_ar and len(item.specs_ar) != len(item.specs):
+            raise ModelRetry(
+                f"For {item.key}, specs_ar must translate each specs entry in the same order."
+            )
     return out
 
 
@@ -115,7 +137,7 @@ def build_model(name: str | None = None) -> Model | str:
             provider=OpenAIProvider(base_url=settings.hetzner_base_url, api_key=token),
             settings=OpenAIChatModelSettings(
                 temperature=0.0,
-                max_tokens=12000,  # 20 items x (600-char description + specs) with headroom
+                max_tokens=24000,  # bilingual descriptions/specs for a 20-item batch
                 extra_body={"chat_template_kwargs": {"enable_thinking": False}},
             ),
         )
@@ -161,6 +183,51 @@ class EnrichReport:
     merges: list[tuple[str, str]] = field(default_factory=list)
 
 
+def _identity_labels(texts: list[str]) -> frozenset[str]:
+    labels = set()
+    for text in texts:
+        labels.update(_names.accessory_signature(text))
+        cleaned = _names.clean(text)
+        if re.search(r"\bkit\b", cleaned) and not re.search(
+            r"\b(?:dev|development) kit\b", cleaned
+        ):
+            labels.add("kit")
+        if re.search(r"\b(?:not included|without (?:the )?(?:board|module))\b", cleaned):
+            labels.add("module-not-included")
+    return frozenset(labels)
+
+
+def _explicit_variants(texts: list[str]) -> dict[str, set[str]]:
+    """Only compare explicit corresponding specifications; absence is not a conflict.
+
+    Full numeric signatures are deliberately not equated here: legitimate official aliases
+    can replace ESP-WROOM-32 with ESP32, for example, or add a previously unspecified revision.
+    """
+    variants: dict[str, set[str]] = {}
+    for text in texts:
+        cleaned = _names.clean(text)
+        for value in re.findall(r"\b\d+(?:\.\d+)?(?:kb|mb|gb|tb)\b", cleaned):
+            variants.setdefault("memory", set()).add(value)
+        for value in re.findall(r"\b(\d+)\s*-?\s*pins?\b", cleaned):
+            variants.setdefault("pins", set()).add(value)
+        for value in re.findall(r"\besp32(?:-?[sc]\d)?\b", cleaned):
+            variants.setdefault("esp32-chipset", set()).add(value.replace("-", ""))
+        if re.search(r"\b(?:arduino|uno)\b", cleaned):
+            for value in re.findall(r"\br[34]\b", cleaned):
+                variants.setdefault("arduino-revision", set()).add(value)
+    chipsets = variants.get("esp32-chipset", set())
+    if len(chipsets) > 1:
+        chipsets.discard("esp32")  # a generic alias must not erase a known S3/C3 variant
+    return variants
+
+
+def _identities_conflict(left: list[str], right: list[str]) -> bool:
+    if _identity_labels(left) != _identity_labels(right):
+        return True
+    a, b = _explicit_variants(left), _explicit_variants(right)
+    return any(a[key].isdisjoint(b[key]) for key in a.keys() & b.keys())
+
+
 class Enricher:
     def __init__(
         self,
@@ -182,7 +249,11 @@ class Enricher:
         self.cache: dict[str, Enrichment] = store.read_enrichment()
         if mirror_path and mirror_path.exists():
             extra = read_enrichment_file(mirror_path)
-            new = {k: v for k, v in extra.items() if k not in self.cache}
+            new = {
+                k: v
+                for k, v in extra.items()
+                if k not in self.cache or v.version > self.cache[k].version
+            }
             if new:
                 log.info("enrichment: resumed %d cached items from checkpoint", len(new))
                 self.cache.update(new)
@@ -220,12 +291,14 @@ class Enricher:
         pending: list[Product] = []
         stale: list[Product] = []
         for p in catalog.sorted_products():
-            if p.enriched:
-                continue
             hit = self.cache.get(p.id) or self.cache.get(self.key_aliases.get(p.id, ""))
+            if p.enriched and (hit is None or hit.version >= ENRICHMENT_VERSION):
+                continue
             if hit is not None and hit.version >= ENRICHMENT_VERSION:
-                self._apply(catalog, p, hit, report)
-                report.cached += 1
+                if self._apply(catalog, p, hit, report):
+                    report.cached += 1
+                else:
+                    pending.append(p)
             elif hit is not None:
                 self._apply(catalog, p, hit, report)  # keep the old answer until refreshed
                 p.enriched = False
@@ -286,17 +359,48 @@ class Enricher:
             for e in result.output.items:
                 if (p := catalog.products.get(e.key)) is None:
                     continue
-                self.cache[e.key] = e
-                self._apply(catalog, p, e, report)
-                report.enriched += 1
+                if self._apply(catalog, p, e, report):
+                    self.cache[p.id] = e
+                    report.enriched += 1
             self.save()
         return report
 
-    def _apply(self, catalog: Catalog, p: Product, e: Enrichment, report: EnrichReport) -> None:
+    def _apply(self, catalog: Catalog, p: Product, e: Enrichment, report: EnrichReport) -> bool:
         if p.id not in catalog.products:
-            return  # already merged away in this pass
+            return False  # already merged away in this pass
+        proposed_name = e.canonical_name.strip()
+        source_names = [p.canonical_name, *p.raw_names]
+        other_id = catalog.aliases.get(_names.clean(proposed_name))
+        other = catalog.products.get(other_id or "")
+        conflict = _identities_conflict(source_names, [proposed_name])
+        source_variants, proposed_variants = (
+            _explicit_variants(source_names),
+            _explicit_variants([proposed_name]),
+        )
+        if any(
+            key in source_variants and key not in proposed_variants
+            for key in ("memory", "arduino-revision")
+        ):
+            conflict = True
+        if (
+            source_variants.get("esp32-chipset", set()) - {"esp32"}
+            and "esp32-chipset" not in proposed_variants
+        ):
+            conflict = True
+        if other is not None and other.id != p.id:
+            conflict |= _identities_conflict(source_names, [other.canonical_name, *other.raw_names])
+        if conflict:
+            log.warning(
+                "enrichment: rejected identity-changing name for %s: %s", p.id, proposed_name
+            )
+            return False
         p.description = e.description
+        # Keep each translation tied to the English text from the same answer. Older
+        # cache rows intentionally fall back to English rather than retaining stale Arabic.
+        p.canonical_name_ar = e.canonical_name_ar
+        p.description_ar = e.description_ar
         p.specs = e.specs or p.specs
+        p.specs_ar = e.specs_ar if len(e.specs_ar) == len(p.specs) else []
         p.mpn = e.mpn or p.mpn
         p.brand = p.brand or e.brand
         p.tags = sorted(set(p.tags) | set(e.tags))
@@ -326,3 +430,4 @@ class Enricher:
             report.merges.append((p.id, other))
         else:
             catalog.aliases[_names.clean(p.canonical_name)] = p.id
+        return True

@@ -1,6 +1,7 @@
 /** App-wide catalog cache (Svelte 5 runes). Loaded once, shared by list and product pages. */
 import { loadCatalog, loadManifest, loadStats, type Manifest, type Product, type Stats } from './parquet';
 import { buildIndex, type Index } from './search';
+import { formatNumber, tr } from './i18n.svelte';
 
 export const GROUP_META: Record<string, { label: string; icon: string }> = {
 	'dev-boards': { label: 'Dev boards', icon: '🧩' },
@@ -41,28 +42,38 @@ class Catalog {
 		return [...m.entries()].sort((a, b) => b[1] - a[1]);
 	});
 
-	async ensure(): Promise<void> {
-		if (this.products.length || this.loading) return;
+	private pending: Promise<void> | null = null;
+	private loaded = false;
+
+	ensure(): Promise<void> {
+		if (this.loaded) return Promise.resolve();
+		if (this.pending) return this.pending;
 		this.loading = true;
-		try {
-			const manifest = await loadManifest();
-			const [products, stats] = await Promise.all([loadCatalog(), loadStats()]);
-			this.manifest = manifest;
-			this.products = products;
-			this.stats = stats;
-			this.index = buildIndex(products);
-		} catch (e) {
-			this.error = e instanceof Error ? e.message : String(e);
-		} finally {
-			this.loading = false;
-		}
+		this.error = null;
+		this.pending = (async () => {
+			try {
+				const [manifest, products, stats] = await Promise.all([loadManifest(), loadCatalog(), loadStats()]);
+				this.manifest = manifest;
+				this.products = products;
+				this.stats = stats;
+				this.index = buildIndex(products);
+				this.loaded = true;
+			} catch (error) {
+				this.error = error instanceof Error ? error.message : String(error);
+			} finally {
+				this.loading = false;
+				this.pending = null;
+			}
+		})();
+		return this.pending;
 	}
+
 }
 
 export const catalog = new Catalog();
 
 export const fmtPrice = (v: number | null | undefined, cur = 'EGP'): string =>
-	v == null ? '—' : `${Math.round(v).toLocaleString('en-EG')} ${cur}`;
+	v == null || !Number.isFinite(v) ? '—' : `${formatNumber(v)} ${cur === 'EGP' ? tr('EGP', 'ج.م') : cur}`.trim();
 
 export const sellerName = (slug: string): string =>
 	slug.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());

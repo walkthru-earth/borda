@@ -15,6 +15,7 @@ import {
 	asyncBufferFromUrl,
 	cachedAsyncBuffer,
 	parquetMetadataAsync,
+	parquetMetadata,
 	parquetReadObjects,
 	type AsyncBuffer,
 	type FileMetaData,
@@ -23,7 +24,7 @@ import {
 import { compressors } from 'hyparquet-compressors'; // zstd (+ WASM snappy) for the browser
 import { base } from '$app/paths';
 
-export const DATA_BASE: string = (import.meta.env.VITE_DATA_BASE as string | undefined) ?? `${base}/data`;
+export const DATA_BASE: string = ((import.meta.env.VITE_DATA_BASE as string | undefined) ?? `${base}/data`).replace(/\/$/, '');
 const CACHE_NAME = 'egmarket-parquet-v1';
 
 export interface FileInfo { sha256: string; bytes: number; footer: number | null; rows: number | null; row_groups: number | null }
@@ -42,6 +43,7 @@ export interface Manifest {
 export interface Product {
 	id: string;
 	canonical_name: string;
+	canonical_name_ar?: string | null;
 	raw_names: string[];
 	tags: string[];
 	brand: string | null;
@@ -54,7 +56,9 @@ export interface Product {
 }
 export interface ProductDetail extends Product {
 	description: string | null;
+	description_ar?: string | null;
 	specs: string[];
+	specs_ar?: string[];
 	mpn: string | null;
 	datasheet_url: string | null;
 	listings: Record<string, string>;
@@ -70,16 +74,19 @@ export interface Stats {
 	latest_ts: Date | null;
 	in_stock_sellers: number;
 	observations: number;
+	/** Latest observed listings; undefined for older data exports. */
+	current_offers?: CurrentOffer[];
 }
 export type Availability = 'in_stock' | 'out_of_stock' | 'preorder' | 'unknown';
-export interface Point { product_id: string; ts: Date; seller: string; price: number | null; currency: string; availability: Availability; url: string }
+export interface CurrentOffer { ts: Date; seller: string; price: number | null; currency: string; availability: Availability; url: string }
+export interface Point extends CurrentOffer { product_id: string }
 
 let manifestPromise: Promise<Manifest> | null = null;
 export function loadManifest(): Promise<Manifest> {
 	manifestPromise ??= fetch(`${DATA_BASE}/manifest.json`, { cache: 'no-cache' }).then(async (r) => {
 		if (!r.ok) throw new Error(`manifest.json: HTTP ${r.status}`);
 		return (await r.json()) as Manifest;
-	});
+	}).catch((error) => { manifestPromise = null; throw error; });
 	return manifestPromise;
 }
 
@@ -93,7 +100,7 @@ async function versioned(path: string): Promise<{ url: string; info: FileInfo | 
 async function wholeFile(path: string): Promise<ArrayBuffer> {
 	const { url } = await versioned(path);
 	const cache = typeof caches !== 'undefined' ? await caches.open(CACHE_NAME).catch(() => null) : null;
-	const hit = await cache?.match(url);
+	const hit = await cache?.match(url).catch(() => undefined);
 	if (hit) return hit.arrayBuffer();
 	const res = await fetch(url);
 	if (!res.ok) throw new Error(`${path}: HTTP ${res.status}`);
@@ -104,7 +111,10 @@ async function wholeFile(path: string): Promise<ArrayBuffer> {
 const wholeBuffers = new Map<string, Promise<ArrayBuffer>>();
 function whole(path: string): Promise<ArrayBuffer> {
 	let p = wholeBuffers.get(path);
-	if (!p) { p = wholeFile(path); wholeBuffers.set(path, p); }
+	if (!p) {
+		p = wholeFile(path).catch((error) => { wholeBuffers.delete(path); throw error; });
+		wholeBuffers.set(path, p);
+	}
 	return p;
 }
 
@@ -120,7 +130,7 @@ function remote(path: string): Promise<Remote> {
 			const file = cachedAsyncBuffer(raw);
 			const metadata = await parquetMetadataAsync(file, { initialFetchSize: (info?.footer ?? 0) + 4096 || undefined });
 			return { file, metadata };
-		})();
+		})().catch((error) => { remotes.delete(path); throw error; });
 		remotes.set(path, p);
 	}
 	return p;
@@ -128,12 +138,16 @@ function remote(path: string): Promise<Remote> {
 
 async function readWhole<T>(path: string, columns?: string[], filter?: ParquetQueryFilter): Promise<T[]> {
 	const file = await whole(path);
-	return (await parquetReadObjects({ file, columns, filter, compressors })) as T[];
+	const metadata = parquetMetadata(file);
+	const available = new Set(metadata.schema.map((column) => column.name));
+	// Optional additive columns must not make pre-translation snapshots unreadable.
+	const selectedColumns = columns?.filter((column) => available.has(column));
+	return (await parquetReadObjects({ file, metadata, columns: selectedColumns, filter, compressors })) as T[];
 }
 
 // ---------------------------------------------------------------------------- public API
 
-const LIST_COLUMNS = ['id', 'canonical_name', 'raw_names', 'tags', 'brand', 'category', 'group', 'image', 'sellers', 'similar', 'enriched'];
+const LIST_COLUMNS = ['id', 'canonical_name', 'canonical_name_ar', 'raw_names', 'tags', 'brand', 'category', 'group', 'image', 'sellers', 'similar', 'enriched'];
 
 export function loadCatalog(): Promise<Product[]> {
 	return readWhole<Product>('catalog.parquet', LIST_COLUMNS);
@@ -141,19 +155,24 @@ export function loadCatalog(): Promise<Product[]> {
 
 export async function loadProductDetail(id: string): Promise<ProductDetail | null> {
 	const rows = await readWhole<Omit<ProductDetail, 'listings'> & { listings: string }>(
-		'catalog.parquet', [...LIST_COLUMNS, 'description', 'specs', 'mpn', 'datasheet_url', 'listings'], { id: { $eq: id } }
+		'catalog.parquet', [...LIST_COLUMNS, 'description', 'description_ar', 'specs', 'specs_ar', 'mpn', 'datasheet_url', 'listings'], { id: { $eq: id } }
 	);
 	const r = rows[0];
 	return r ? { ...r, listings: JSON.parse(r.listings || '{}') as Record<string, string> } : null;
 }
 
 export async function loadStats(): Promise<Map<string, Stats>> {
-	const rows = await readWhole<Stats>('stats.parquet', ['product_id', 'currency', 'min', 'max', 'median', 'latest_min', 'latest_ts', 'in_stock_sellers', 'observations']);
-	return new Map(rows.map((r) => [r.product_id, r]));
+	// Read the complete small table so older snapshots without current_offers still work.
+	const rows = await readWhole<Omit<Stats, 'current_offers'> & { current_offers?: string | null }>('stats.parquet');
+	return new Map(rows.map((row) => {
+		const { current_offers, ...stats } = row;
+		const offers: CurrentOffer[] | undefined = current_offers == null ? undefined : JSON.parse(current_offers);
+		return [row.product_id, { ...stats, current_offers: offers?.map((offer) => ({ ...offer, ts: new Date(offer.ts) })) }];
+	}));
 }
 
 /** Price history for one or more products via pruned range reads on series.parquet. */
-export async function loadSeries(ids: string[]): Promise<Point[]> {
+export async function loadSeries(ids: string[], options: { strict?: boolean } = {}): Promise<Point[]> {
 	if (ids.length === 0) return [];
 	try {
 		const { file, metadata } = await remote('series.parquet');
@@ -161,17 +180,20 @@ export async function loadSeries(ids: string[]): Promise<Point[]> {
 		const rows = (await parquetReadObjects({ file, metadata, filter, compressors, useBloomFilters: true })) as Point[];
 		return rows.sort((a, b) => +a.ts - +b.ts);
 	} catch (e) {
+		if (options.strict) throw e;
 		console.warn('series unavailable', e);
 		return [];
 	}
 }
 
 /** Seller descriptions + documentation links for one product (pruned range reads). */
-export async function loadListings(productId: string): Promise<Listing[]> {
+export async function loadListings(productId: string, options: { strict?: boolean } = {}): Promise<Listing[]> {
 	try {
+		if (!(await loadManifest()).files['listings.parquet']) return [];
 		const { file, metadata } = await remote('listings.parquet');
 		return (await parquetReadObjects({ file, metadata, compressors, filter: { product_id: { $eq: productId } }, useBloomFilters: true })) as Listing[];
-	} catch {
+	} catch (error) {
+		if (options.strict) throw error;
 		return [];
 	}
 }
@@ -191,6 +213,9 @@ export async function loadEmbeddings(): Promise<{ ids: string[]; dim: number; ve
 	const rows = await readWhole<{ product_id: string; vec_i8: Uint8Array }>('embeddings.parquet', ['product_id', 'vec_i8']);
 	const dim = rows[0]?.vec_i8.length ?? 384;
 	const vectors = new Int8Array(rows.length * dim);
+	if (dim !== 384 || rows.some((row) => row.vec_i8.length !== dim)) {
+		throw new Error('The AI search index is incompatible with the query model. Refresh the catalog and try again.');
+	}
 	rows.forEach((r, i) => vectors.set(new Int8Array(r.vec_i8.buffer, r.vec_i8.byteOffset, dim), i * dim));
 	return { ids: rows.map((r) => r.product_id), dim, vectors };
 }

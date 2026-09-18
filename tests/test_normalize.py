@@ -1,3 +1,5 @@
+import pytest
+
 from egmarket.normalize import Catalog, canonical_rule, clean, match_key, numeric_signature, slugify
 from egmarket.normalize.tags import derive_tags
 
@@ -94,3 +96,59 @@ def test_tags_from_name_category_and_brand(make_offer):
     )
     tags = derive_tags(cat.products[pid])
     assert {"servo", "motor", "motors-drivers", "towerpro"} <= set(tags)
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "PCB FOR ESP32-C6 USB Development Board",
+        "ESP32 Development Board For IOT Attendance Projects",
+        "ESP32-C6 DevKit Development Board",
+        "ESP32-S3 N16R8 Development Board with 2.4GHz WiFi and Bluetooth 5.0",
+        "ESP32-S2 WEMOS S2 Mini Development Board",
+        "ESP32-S3 N8R2 Development Board",
+        "ESP32-S3 N16R8 UNO Development Board WiFi & Bluetooth",
+        "ESP32 30Pin DEVKIT Expansion Board",
+        "14 Channels Relay Module for ESP32 IOT Development Board",
+        "ESP32 Development Board 38-Pin with CP2102 Mirco USB",
+        "ESP32-WROVER-E Development Board with OV2640 Camera",
+        "ESP32-WROOM-32 Dual-Core Wi-Fi Bluetooth IoT Module",
+        "LILYGO TTGO T-Beam ESP32 LoRa Development Board GPS Module NEO-6M",
+        "ESP32-CAM-MB USB Programmer",
+        "Arduino Leonardo Shield",
+        "PCB For Arduino UNO Compatible Robotic DIY projects Board",
+        "TFT LCD Touch Panel for Arduino UNO and Mega2560",
+        "UGE Alpha Rev3 Board Arduino Uno Compatible",
+        "Raspberry Pi Pico Breakout Board",
+        "Raspberry Pi Pico Work Area",
+        "Raspberry Pi 5 8GB Case",
+        "Raspberry Pi Pico 2 W",
+        "RP2350A Raspberry Pi Pico2 chip microcontroller QFN60",
+        "Arduino Pro Mini 3.3V 8MHz",
+        "Arduino Pro Mini 5V 16MHz",
+        "STM32F401 Black Pill",
+    ],
+)
+def test_canonical_rules_preserve_board_variants_and_accessories(name):
+    assert canonical_rule(name) is None
+
+
+def test_esp32_chipsets_memory_and_accessories_stay_separate(make_offer):
+    cat = Catalog()
+    names = [
+        "ESP32 DevKit V1",
+        "ESP32-C6 DevKit Development Board",
+        "ESP32-S3 N16R8 Development Board",
+        "ESP32-S3 N8R2 Development Board",
+        "ESP32-S2 WEMOS S2 Mini Development Board",
+        "PCB FOR ESP32-C6 USB Development Board",
+        "ESP32 30Pin DEVKIT Expansion Board",
+        "14 Channels Relay Module for ESP32 IOT Development Board",
+        "ESP32 Development Board 30-Pin with CP2102",
+        "ESP32 Development Board 38-Pin with CP2102",
+        "ESP32-S3 N16R8 WiFi Bluetooth Development Board",
+        "PCB For ESP32-S3 N16R8 WiFi Bluetooth Development Board",
+    ]
+    ids = [cat.resolve(make_offer("s1", name), fuzzy_threshold=93)[0] for name in names]
+    assert len(set(ids)) == len(names)
+    assert ids[0] == "esp32-devkit-v1-wroom-32"

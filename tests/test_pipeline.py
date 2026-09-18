@@ -202,6 +202,10 @@ async def test_reindex_replays_history_and_keeps_enrichment(tmp_path, monkeypatc
     p.id = "hc-sr04-ultrasonic-distance-sensor"
     p.enriched = True
     cat.products[p.id] = p
+    # Old public URLs must remain valid across repeated reindexes, even when their
+    # ids can no longer be recreated by today's normalization rules.
+    cat.redirects["legacy-ultrasonic-link"] = p.id
+    cat.redirects["older-ultrasonic-link"] = "legacy-ultrasonic-link"
     store.write_catalog(cat)
 
     monkeypatch.setattr(ai_mod.settings, "ai_enabled", False)
@@ -211,6 +215,11 @@ async def test_reindex_replays_history_and_keeps_enrichment(tmp_path, monkeypatc
     assert "hc-sr04-ultrasonic-distance-sensor" in cat2.products  # cache re-applied via redirect
     assert cat2.products["hc-sr04-ultrasonic-distance-sensor"].enriched
     assert cat2.resolve_id(old_id) == "hc-sr04-ultrasonic-distance-sensor"
+    assert cat2.resolve_id("older-ultrasonic-link") == "hc-sr04-ultrasonic-distance-sensor"
+    assert (
+        str(cat2.products["arduino-uno-r3"].datasheet_url)
+        == "https://a.test/files/uno_datasheet.pdf"
+    )
     assert all(v in cat2.products and k not in cat2.products for k, v in cat2.redirects.items())
 
 

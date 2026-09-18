@@ -92,9 +92,12 @@ CATALOG_SCHEMA = pa.schema(
     [
         ("id", pa.string()),
         ("canonical_name", pa.string()),
+        ("canonical_name_ar", pa.string()),
         ("raw_names", STR_LIST),
         ("tags", STR_LIST),
         ("description", pa.string()),
+        ("description_ar", pa.string()),
+        ("specs_ar", STR_LIST),
         ("specs", STR_LIST),  # "Key: value" highlights from enrichment
         ("mpn", pa.string()),
         ("datasheet_url", pa.string()),  # only when a seller page links one
@@ -132,6 +135,7 @@ STATS_SCHEMA = pa.schema(
         ("latest_min", pa.float64()),
         ("latest_ts", TS),
         ("in_stock_sellers", pa.int32()),
+        ("current_offers", pa.string()),  # JSON listing-level offers for precise browse filters
         ("observations", pa.int32()),
         ("sellers", STR_LIST),
         ("tags", STR_LIST),
@@ -162,9 +166,15 @@ ENRICHMENT_SCHEMA = pa.schema(
     [
         ("key", pa.string()),
         ("canonical_name", pa.string()),
+        ("canonical_name_ar", pa.string()),
         ("description", pa.string()),
+        ("description_ar", pa.string()),
+        ("specs_ar", STR_LIST),
+        ("specs", STR_LIST),
+        ("mpn", pa.string()),
         ("tags", STR_LIST),
         ("brand", pa.string()),
+        ("group", pa.string()),
         ("model", pa.string()),
         ("ts", TS),
         ("version", pa.int16()),  # prompt/schema version that produced the row
@@ -235,6 +245,19 @@ class ParquetStore:
         sha = write_table(path, table, **layout)
         self.written[str(path.relative_to(self.data_dir))] = file_info(path, sha)
         return sha
+
+    def manifest_files(self) -> dict[str, dict[str, Any]]:
+        """Include unchanged exports as well as files written during this operation.
+
+        A rebuild without AI/embeddings still needs their file hashes and exact footer
+        sizes, otherwise the browser loses cache versioning and range-read metadata.
+        """
+        files = dict(self.written)
+        for path in self.data_dir.glob("*.parquet"):
+            key = path.name
+            if key not in files:
+                files[key] = file_info(path, hashlib.sha256(path.read_bytes()).hexdigest())
+        return dict(sorted(files.items()))
 
     # ------------------------------------------------------------------ history (append)
     def write_run(self, run: Run) -> None:

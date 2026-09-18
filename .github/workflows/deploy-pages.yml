@@ -35,8 +35,6 @@ jobs:
           cache: pnpm
           cache-dependency-path: frontend/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
-      - name: Bundle parquet data into the site
-        run: pnpm run sync-data ../data
       - name: Build
         env:
           # project pages live under /<repo>/

@@ -151,7 +151,7 @@ def update_listings(
         }
     # follow merges for listings from earlier runs
     for row in existing.values():
-        row["product_id"] = catalog.resolve_id(row["product_id"])
+        row["product_id"] = catalog.resolve_listing(row["product_id"], row["seller"], row["url"])
     return {k: r for k, r in existing.items() if r["product_id"] in catalog.products}
 
 
@@ -379,6 +379,7 @@ async def reindex(data_dir: Path, *, ai: bool = False, embeddings: bool = True) 
     store = ParquetStore(data_dir)
     offers = store.read_offers()
     old = store.read_catalog()
+    listings = store.read_listings()
     catalog = Catalog()
     cols = offers.select(
         [
@@ -404,6 +405,7 @@ async def reindex(data_dir: Path, *, ai: bool = False, embeddings: bool = True) 
         if key in seen:
             continue  # first observation of a listing decides; later runs re-attach anyway
         seen.add(key)
+        listing = listings.get(f"{cols['seller'][i]}:{urlparse(cols['url'][i]).path}", {})
         try:
             raw = RawOffer(
                 seller=cols["seller"][i],
@@ -415,6 +417,8 @@ async def reindex(data_dir: Path, *, ai: bool = False, embeddings: bool = True) 
                 sku=cols["sku"][i],
                 category=cols["category"][i],
                 image=cols["image"][i],
+                description=listing.get("description"),
+                links=listing.get("links") or [],
             )
         except Exception as exc:  # noqa: BLE001 - a bad historical row must not stop the reindex
             log.debug("skip %s: %s", key, exc)
@@ -436,7 +440,9 @@ async def reindex(data_dir: Path, *, ai: bool = False, embeddings: bool = True) 
         report.enriched,
         report.merged,
     )
+    catalog.redirects = _rebuild_redirects(old, catalog)
     store.write_catalog(catalog)
+    store.write_listings(update_listings(listings, [], [], catalog))
     return rebuild_exports(data_dir, embeddings=embeddings)
 
 
@@ -481,7 +487,7 @@ def _refresh_manifest(store: ParquetStore, catalog: Catalog) -> None:
         products=len(catalog.products),
         offers_total=store.read_offers(columns=["run_id"]).num_rows,
         groups=dict(sorted(Counter(p.group or "other" for p in catalog.products.values()).items())),
-        files={k: FileInfo(**v) for k, v in sorted(store.written.items())},
+        files={k: FileInfo(**v) for k, v in store.manifest_files().items()},
         runs=prev_runs,
     )
     path.write_text(manifest.model_dump_json(indent=1) + "\n")
@@ -521,7 +527,7 @@ def _write_manifest(store: ParquetStore, run: Run, catalog: Catalog, new_product
         products=len(catalog.products),
         offers_total=store.read_offers(columns=["run_id"]).num_rows,
         groups=dict(sorted(Counter(p.group or "other" for p in catalog.products.values()).items())),
-        files={k: FileInfo(**v) for k, v in sorted(store.written.items())},
+        files={k: FileInfo(**v) for k, v in store.manifest_files().items()},
         runs=[*prev, summary][-240:],
     )
     path.write_text(manifest.model_dump_json(indent=1) + "\n")

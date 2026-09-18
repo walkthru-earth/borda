@@ -1,162 +1,135 @@
 <script lang="ts">
-	import { page } from '$app/state';
-	import { goto } from '$app/navigation';
-	import ProductCard from '$lib/ProductCard.svelte';
-	import { catalog, groupIcon, groupLabel, sellerName } from '$lib/data.svelte';
-	import { search } from '$lib/search';
-	import { fuse, semanticSearch, type Hit, type Progress } from '$lib/semantic';
-	import type { Product } from '$lib/parquet';
-
-	// URL is the source of truth for every filter, so results are shareable/bookmarkable.
-	let q = $derived(page.url.searchParams.get('q') ?? '');
-	let group = $derived(page.url.searchParams.get('group') ?? '');
-	let tag = $derived(page.url.searchParams.get('tag') ?? '');
-	let seller = $derived(page.url.searchParams.get('seller') ?? '');
-	let stock = $derived(page.url.searchParams.get('stock') === '1');
-	let sort = $derived(page.url.searchParams.get('sort') ?? 'relevance');
-	let maxPrice = $derived(Number(page.url.searchParams.get('max') ?? 0) || 0);
-	let semantic = $derived(page.url.searchParams.get('ai') === '1');
-
-	function setParams(patch: Record<string, string | null>) {
-		const u = new URL(page.url);
-		for (const [k, v] of Object.entries(patch)) v ? u.searchParams.set(k, v) : u.searchParams.delete(k);
-		void goto(`${u.pathname}${u.search}`, { replaceState: true, keepFocus: true, noScroll: true });
-	}
-
-	// --- semantic results (lazy: model + embeddings load only when enabled)
-	let semHits = $state<Hit[]>([]);
-	let semBusy = $state(false);
-	let semProgress = $state<Progress | null>(null);
-	let semError = $state<string | null>(null);
-	$effect(() => {
-		const query = q, on = semantic;
-		if (!on || query.trim().length < 2) { semHits = []; return; }
-		let cancelled = false;
-		semBusy = true;
-		const t = setTimeout(() => {
-			semanticSearch(query, 80, (p) => (semProgress = p))
-				.then((h) => { if (!cancelled) semHits = h; })
-				.catch((e) => { if (!cancelled) semError = e instanceof Error ? e.message : String(e); })
-				.finally(() => { if (!cancelled) { semBusy = false; semProgress = null; } });
-		}, 250);
-		return () => { cancelled = true; clearTimeout(t); };
-	});
-
-	let results = $derived.by((): Product[] => {
-		if (!catalog.index) return [];
-		let list = search(catalog.index, q, 5000);
-		if (semantic && semHits.length) {
-			const ids = fuse(list.map((p) => p.id), semHits);
-			list = ids.map((id) => catalog.byId.get(id)).filter((p): p is Product => !!p);
-		}
-		if (group) list = list.filter((p) => (p.group ?? 'other') === group);
-		if (tag) list = list.filter((p) => p.tags.includes(tag));
-		if (seller) list = list.filter((p) => p.sellers.includes(seller));
-		if (stock) list = list.filter((p) => (catalog.stats.get(p.id)?.in_stock_sellers ?? 0) > 0);
-		if (maxPrice) list = list.filter((p) => (catalog.stats.get(p.id)?.latest_min ?? Infinity) <= maxPrice);
-		const price = (p: Product) => catalog.stats.get(p.id)?.latest_min ?? Infinity;
-		if (sort === 'price-asc') list = [...list].sort((a, b) => price(a) - price(b));
-		else if (sort === 'price-desc') list = [...list].sort((a, b) => (price(b) === Infinity ? -1 : price(b)) - (price(a) === Infinity ? -1 : price(a)));
-		else if (sort === 'sellers') list = [...list].sort((a, b) => b.sellers.length - a.sellers.length);
-		else if (sort === 'name') list = [...list].sort((a, b) => a.canonical_name.localeCompare(b.canonical_name));
-		return list;
-	});
-
-	// infinite list
-	let limit = $state(48);
-	$effect(() => { void [q, group, tag, seller, stock, sort, maxPrice]; limit = 48; });
-	let shown = $derived(results.slice(0, limit));
-	function sentinel(node: HTMLElement) {
-		const io = new IntersectionObserver((es) => { if (es[0].isIntersecting) limit += 48; }, { rootMargin: '600px' });
-		io.observe(node);
-		return { destroy: () => io.disconnect() };
-	}
-
-	let filtersOpen = $state(false);
-	let activeFilters = $derived([tag, seller, stock ? '1' : '', maxPrice ? '1' : '', sort !== 'relevance' ? '1' : ''].filter(Boolean).length);
-	let tagsForGroup = $derived.by(() => {
-		if (!group) return catalog.tagCounts.slice(0, 30);
-		const m = new Map<string, number>();
-		for (const p of catalog.products) if ((p.group ?? 'other') === group) for (const t of p.tags) m.set(t, (m.get(t) ?? 0) + 1);
-		return [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, 30);
-	});
+ import { page } from '$app/state';
+ import { goto } from '$app/navigation';
+ import { Search, SlidersHorizontal, X, Sparkles, ArrowRight, Check, Store, Layers, ArrowUpDown, ChevronDown, RotateCcw, CircuitBoard, Cpu, Zap, Radio, PackageSearch, LoaderCircle, Info } from '@lucide/svelte';
+ import ProductCard from '$lib/ProductCard.svelte';
+ import CategoryIcon from '$lib/CategoryIcon.svelte';
+ import { locale, tr, formatNumber, groupName as groupLabel } from '$lib/i18n.svelte';
+ import { catalog, sellerName } from '$lib/data.svelte';
+ import { search, productMatchesFilters, matchingPrice } from '$lib/search';
+ import { fuse, semanticSearch, type Hit, type Progress } from '$lib/semantic';
+ import type { Product } from '$lib/parquet';
+ let q = $derived(page.url.searchParams.get('q') ?? '');
+ let group = $derived(page.url.searchParams.get('group') ?? '');
+ let tag = $derived(page.url.searchParams.get('tag') ?? '');
+ let seller = $derived(page.url.searchParams.get('seller') ?? '');
+ let stock = $derived(page.url.searchParams.get('stock') === '1');
+ const sorts = ['relevance', 'price-asc', 'price-desc', 'sellers', 'name'];
+ let sort = $derived(sorts.includes(page.url.searchParams.get('sort') ?? '') ? page.url.searchParams.get('sort')! : 'relevance');
+ function priceParam(key: string) { const n = Number(page.url.searchParams.get(key)); return Number.isFinite(n) && n > 0 ? n : 0; }
+ let minPrice = $derived(priceParam('min'));
+ let maxPrice = $derived(priceParam('max'));
+ let semantic = $derived(page.url.searchParams.get('ai') === '1');
+ let filtersOpen = $state(false);
+ let categoryExpanded = $state(false);
+ let priceError = $state('');
+ let minDraft = $state(''); let maxDraft = $state('');
+ $effect(() => { minDraft = minPrice ? String(minPrice) : ''; maxDraft = maxPrice ? String(maxPrice) : ''; priceError = ''; });
+ function setParams(patch: Record<string, string | null>) {
+  const u = new URL(page.url);
+  for (const [k,v] of Object.entries(patch)) v ? u.searchParams.set(k,v) : u.searchParams.delete(k);
+  void goto(`${u.pathname}${u.search}`, { replaceState:true, keepFocus:true, noScroll:true });
+ }
+ function applyPrice() {
+  const min = Number(minDraft ?? ''), max = Number(maxDraft ?? '');
+  if (!Number.isFinite(min) || !Number.isFinite(max) || min < 0 || max < 0 || (max > 0 && min > max)) { priceError = tr('Enter a minimum below the maximum.','أدخل حدًا أدنى أقل من الحد الأقصى.'); return; }
+  priceError = ''; setParams({ min:min > 0 ? String(min) : null, max:max > 0 ? String(max) : null });
+ }
+ function resetFilters() { setParams({ group:null, tag:null, seller:null, stock:null, min:null, max:null }); }
+ let semHits = $state<Hit[]>([]);
+ let semBusy = $state(false);
+ let semProgress = $state<Progress | null>(null);
+ let semError = $state<string | null>(null);
+ $effect(() => {
+  const query = q, enabled = semantic;
+  semHits = []; semBusy = false; semProgress = null; semError = null;
+  if (!enabled || query.trim().length < 2) return;
+  let cancelled = false; semBusy = true;
+  const t = setTimeout(() => {
+   semanticSearch(query,120,(p) => { if (!cancelled) semProgress = p; })
+    .then(h => { if (!cancelled) semHits = h; })
+    .catch(e => { if (!cancelled) semError = e instanceof Error ? e.message : String(e); })
+    .finally(() => { if (!cancelled) { semBusy = false; semProgress = null; } });
+  },300);
+  return () => { cancelled = true; clearTimeout(t); };
+ });
+ let offerFilters = $derived({ seller, inStock:stock, minPrice, maxPrice });
+ let queryResults = $derived.by((): Product[] => {
+  if (!catalog.index) return [];
+  let list = search(catalog.index,q,Infinity);
+  if (semantic && semHits.length) list = fuse(list.map(p => p.id),semHits).map(id => catalog.byId.get(id)).filter((p): p is Product => !!p);
+  return list;
+ });
+ let categoryCounts = $derived.by(() => {
+  const m = new Map<string,number>();
+  for (const p of queryResults.filter(p => productMatchesFilters(p,catalog.stats.get(p.id),offerFilters))) { const g = p.group ?? 'other'; m.set(g,(m.get(g) ?? 0)+1); }
+  return m;
+ });
+ let categoryOptions = $derived(catalog.groups.filter(([g]) => (categoryCounts.get(g) ?? 0) > 0 || g === group).sort(([a],[b]) => (q || seller || stock || minPrice || maxPrice) ? (categoryCounts.get(b) ?? 0)-(categoryCounts.get(a) ?? 0) : (featuredGroups.indexOf(a) < 0 ? 99 : featuredGroups.indexOf(a))-(featuredGroups.indexOf(b) < 0 ? 99 : featuredGroups.indexOf(b))));
+ let results = $derived.by(() => {
+  let list = queryResults.filter(p => (!group || (p.group ?? 'other') === group) && (!tag || p.tags.includes(tag)) && productMatchesFilters(p,catalog.stats.get(p.id),offerFilters));
+  const price = (p: Product) => matchingPrice(catalog.stats.get(p.id),offerFilters);
+  if (sort === 'price-asc' || sort === 'price-desc') list = [...list].sort((a,b) => {
+   const ap = price(a), bp = price(b);
+   if (ap == null || !Number.isFinite(ap)) return bp == null || !Number.isFinite(bp) ? 0 : 1;
+   if (bp == null || !Number.isFinite(bp)) return -1;
+   return sort === 'price-asc' ? ap-bp : bp-ap;
+  });
+  else if (sort === 'sellers') list = [...list].sort((a,b) => b.sellers.length-a.sellers.length);
+  else if (sort === 'name') list = [...list].sort((a,b) => a.canonical_name.localeCompare(b.canonical_name));
+  else if (!q) list = [...list].sort((a,b) => Number((catalog.stats.get(b.id)?.in_stock_sellers ?? 0)>0)-Number((catalog.stats.get(a.id)?.in_stock_sellers ?? 0)>0) || b.sellers.length-a.sellers.length || Number(!!b.image)-Number(!!a.image) || a.canonical_name.localeCompare(b.canonical_name));
+  return list;
+ });
+ let limit = $state(24);
+ $effect(() => { void [q,group,tag,seller,stock,sort,minPrice,maxPrice,semantic]; limit = 24; });
+ let shown = $derived(results.slice(0,limit));
+ let activeFilters = $derived([group,tag,seller,stock,minPrice,maxPrice].filter(Boolean).length);
+ let tagsForGroup = $derived.by(() => {
+  const m = new Map<string,number>();
+  for (const p of queryResults.filter(p => productMatchesFilters(p,catalog.stats.get(p.id),offerFilters))) if (!group || (p.group ?? 'other') === group) for (const t of p.tags) m.set(t,(m.get(t) ?? 0)+1);
+  return [...m.entries()].sort((a,b) => b[1]-a[1]).slice(0,8);
+ });
+ const featuredGroups = ['dev-boards','sensors','wireless-iot','motors-drivers','power','tools-instruments'];
 </script>
 
-<svelte:head><title>{q ? `${q} – ` : ''}EG Maker Market</title></svelte:head>
+<svelte:head><title>{q ? `${q} · ` : ''}{tr('Borda — Electronic components in Egypt','بوردة — مكونات الإلكترونيات في مصر')}</title></svelte:head>
 
-<nav class="scroll-x groups" aria-label="categories">
-	<button class="chip" class:on={!group} onclick={() => setParams({ group: null, tag: null })}>All <span class="muted small">{catalog.products.length || ''}</span></button>
-	{#each catalog.groups as [g, n] (g)}
-		<button class="chip" class:on={g === group} onclick={() => setParams({ group: g === group ? null : g, tag: null })}>{groupIcon(g)} {groupLabel(g)} <span class="muted small">{n}</span></button>
-	{/each}
-</nav>
+<section class="discovery">
+ <div class="hero-copy"><div class="eyebrow"><span class="dot"></span> {tr('THE EGYPTIAN MAKER’S COMPANION','رفيقك في عالم الإلكترونيات في مصر')}</div><h1>{tr('Less searching.','تدوير أقل.')}<br/>{tr('More ','')}<span>{tr('making.','ابتكار أكتر.')}</span></h1><p>{tr('All the parts for your next big idea.','كل قطع مشروعك الجاي في مكان واحد.')}<br class="mobile-break"/> {tr('Find and compare components across Egypt.','دور وقارن بين محلات الإلكترونيات في مصر.')}</p><div class="hero-stats"><span><Layers size={15}/><strong>{catalog.products.length ? formatNumber(catalog.products.length) : '—'}</strong> {tr('components','قطعة')}</span><i></i><span><Store size={15}/><strong>{catalog.sellers.length ? formatNumber(catalog.sellers.length) : '—'}</strong> {tr('local stores','محلات محلية')}</span><span class="hero-note"><Check size={15}/> {tr('One place to look','مكان واحد للبحث')}</span></div></div>
+ <div class="hero-art" aria-hidden="true"><div class="orbit orbit-one"></div><div class="orbit orbit-two"></div><div class="floating sensor"><Radio size={26}/><span>SENSORS</span></div><div class="board"><div class="board-top"><span>MADE TO BUILD</span><span>01</span></div><div class="board-traces"><div class="chip-core"><Cpu size={53} strokeWidth={1}/></div><div class="trace-line"></div><div class="board-led"></div></div><div class="board-bottom"><CircuitBoard size={20}/><span>IDEA → REALITY</span></div><div class="pins"></div></div><div class="floating power"><Zap size={24}/><span>POWER YOUR IDEAS</span></div><div class="found"><span><Check size={13}/></span> Your next project starts here</div></div>
+</section>
 
-<div class="toolbar">
-	<span class="muted small count">
-		{#if catalog.loading}loading catalog…{:else}{results.length.toLocaleString()} products{/if}
-		{#if semBusy}<span class="badge soft">{semProgress?.status === 'progress' && semProgress.progress != null ? `AI model ${Math.round(semProgress.progress)}%` : 'AI…'}</span>{/if}
-	</span>
-	<button class="chip" class:on={semantic} title="Semantic search: understands meaning, not just words (downloads a 23 MB model once)" onclick={() => setParams({ ai: semantic ? null : '1' })}>✨ AI search</button>
-	<button class="chip" class:on={filtersOpen || activeFilters > 0} onclick={() => (filtersOpen = !filtersOpen)}>⚙ Filters{activeFilters ? ` · ${activeFilters}` : ''}</button>
+<nav class="quick-categories scroll-x" aria-label={tr('Popular categories','الفئات الشائعة')}><button class:on={!group} aria-pressed={!group} onclick={() => setParams({group:null,tag:null})}><CategoryIcon/>{tr('All components','كل المكونات')}</button>{#each featuredGroups as g}<button class:on={group===g} aria-pressed={group===g} onclick={() => setParams({group:group===g ? null : g,tag:null})}><CategoryIcon group={g}/>{groupLabel(g)}</button>{/each}</nav>
+
+<div class="catalog-layout">
+ <aside class:expanded={filtersOpen} id="catalog-filters" aria-label={tr('Filter components','فلترة المكونات')}>
+  <div class="filter-heading"><h2><SlidersHorizontal size={17}/> {tr('Filters','الفلاتر')} {#if activeFilters}<span class="filter-count">{activeFilters}</span>{/if}</h2><button class="reset" onclick={resetFilters} disabled={!activeFilters}>{tr('Reset','مسح')}</button></div>
+  <section class="filter-section"><h3>{tr('Category','الفئة')}</h3><div class="category-list"><button class:chosen={!group} aria-pressed={!group} onclick={() => setParams({group:null,tag:null})}><span><CategoryIcon size={16}/> {tr('All components','كل المكونات')}</span><small>{formatNumber([...categoryCounts.values()].reduce((a,b) => a+b,0))}</small></button>{#each (categoryExpanded ? categoryOptions : categoryOptions.slice(0,8)) as [g]}<button class:chosen={group===g} aria-pressed={group===g} onclick={() => setParams({group:group===g ? null : g,tag:null})}><span><CategoryIcon group={g} size={16}/>{groupLabel(g)}</span><small>{formatNumber(categoryCounts.get(g) ?? 0)}</small></button>{/each}</div>{#if categoryOptions.length>8}<button class="text-action" onclick={() => categoryExpanded = !categoryExpanded}>{categoryExpanded ? tr('Show fewer categories','فئات أقل') : tr(`All ${categoryOptions.length} categories`,`كل الفئات (${categoryOptions.length})`)}<ChevronDown size={14} class={categoryExpanded ? 'rotate' : ''}/></button>{/if}</section>
+  <section class="filter-section"><h3>{tr('Availability','التوفر')}</h3><label class="stock-check"><input type="checkbox" checked={stock} onchange={e => setParams({stock:e.currentTarget.checked ? '1' : null})}/><span>{tr('In stock only','المتوفر فقط')}<small>{tr('At the latest store check','حسب آخر رصد للمحل')}</small></span><span class="status-dot"></span></label></section>
+  <section class="filter-section"><h3>{tr('Price range','نطاق السعر')} <span>{tr('EGP','ج.م')}</span></h3><form onsubmit={e => { e.preventDefault(); applyPrice(); }}><div class="price-inputs"><label class="field"><span>{tr('Min','من')}</span><input type="number" inputmode="decimal" min="0" step="any" placeholder="0" bind:value={minDraft}/></label><span class="range-dash">–</span><label class="field"><span>{tr('Max','إلى')}</span><input type="number" inputmode="decimal" min="0" step="any" placeholder={tr('Any','بدون حد')} bind:value={maxDraft}/></label></div>{#if priceError}<p class="price-error" role="alert">{priceError}</p>{/if}<button class="apply-price" type="submit">{tr('Apply price range','تطبيق نطاق السعر')}<ArrowRight size={14}/></button></form><div class="price-presets">{#each [100,500,1000] as n}<button class:chosen={maxPrice===n && !minPrice} onclick={() => setParams({min:null,max:String(n)})}>{tr('Under','أقل من')} {formatNumber(n)}</button>{/each}</div></section>
+  <section class="filter-section"><label class="field seller-field"><span>{tr('Store','المحل')}</span><select value={seller} onchange={e => setParams({seller:e.currentTarget.value || null})}><option value="">{tr('All Egyptian stores','كل المحلات المصرية')}</option>{#each catalog.sellers as s}<option value={s}>{sellerName(s)}</option>{/each}</select></label></section>
+  <div class="filter-tip"><Info size={16}/><p>{tr('Compare before you build. Prices and stock reflect the latest recorded store check.','قارن قبل ما تبدأ. الأسعار والتوفر حسب آخر رصد لكل محل.')}</p></div>
+  <button class="btn primary mobile-done" onclick={() => { filtersOpen = false; document.getElementById('results-heading')?.scrollIntoView({block:'center'}); }}>{tr('Show','عرض')} {formatNumber(results.length)} {tr('results','نتيجة')}<ArrowRight size={15}/></button>
+ </aside>
+ <section class="results" aria-label={tr('Component results','نتائج المكونات')}>
+  <div class="results-header"><div><div class="section-kicker">{tr('THE COMPONENT CATALOG','دليل المكونات')}</div><h2 id="results-heading">{q ? tr(`Results for “${q}”`,`نتائج البحث عن «${q}»`) : group ? groupLabel(group) : tr('Find your next component','لاقي القطعة اللي محتاجها')}<span>{catalog.loading ? tr('Loading…','جاري التحميل…') : tr(`${formatNumber(results.length)} products`,`${formatNumber(results.length)} قطعة`)}</span></h2></div><label class="sort-control"><ArrowUpDown size={15}/><span class="sr-only">{tr('Sort products','ترتيب المكونات')}</span><select value={sort} onchange={e => setParams({sort:e.currentTarget.value==='relevance' ? null : e.currentTarget.value})}><option value="relevance">{q ? tr('Best match','الأكثر صلة') : tr('Recommended','مقترحة لك')}</option><option value="price-asc">{tr('Price: low to high','السعر: من الأقل للأعلى')}</option><option value="price-desc">{tr('Price: high to low','السعر: من الأعلى للأقل')}</option><option value="sellers">{tr('Most stores','الأكثر انتشارًا')}</option><option value="name">{tr('Name: A to Z','الاسم: أبجديًا')}</option></select></label></div>
+  <div class="search-tools"><button class="chip mobile-filter" class:on={filtersOpen} aria-controls="catalog-filters" aria-expanded={filtersOpen} onclick={() => filtersOpen = !filtersOpen}><SlidersHorizontal size={15}/>{tr('Filters','الفلاتر')} {activeFilters || ''}</button><button class="ai-toggle" class:enabled={semantic} aria-pressed={semantic} onclick={() => setParams({ai:semantic ? null : '1'})}><Sparkles size={15}/><strong>{tr('AI discovery','اكتشاف ذكي')}</strong><span class="toggle-track"><span></span></span></button><span class="ai-explainer">{semantic ? tr('Adds related matches · best with English descriptions','نتائج مشابهة · يعمل أفضل بالوصف الإنجليزي') : tr('Find parts by what they do','دور على القطع حسب وظيفتها')}</span><span class="private-note">{semantic ? tr('Model downloads on first search','تحميل النموذج عند أول بحث') : tr('English & Arabic name search','بحث بالأسماء العربية والإنجليزية')}</span></div>
+  {#if activeFilters || q}<div class="active-filters" aria-label={tr('Active filters','الفلاتر المطبقة')}>{#if q}<button class="chip on" onclick={() => setParams({q:null})}>{tr('Search:','بحث:')} {q}<X size={13}/></button>{/if}{#if group}<button class="chip on" onclick={() => setParams({group:null})}>{groupLabel(group)}<X size={13}/></button>{/if}{#if tag}<button class="chip on" onclick={() => setParams({tag:null})}>{tag}<X size={13}/></button>{/if}{#if seller}<button class="chip on" onclick={() => setParams({seller:null})}>{sellerName(seller)}<X size={13}/></button>{/if}{#if stock}<button class="chip on" onclick={() => setParams({stock:null})}>{tr('In stock','متوفر')}<X size={13}/></button>{/if}{#if minPrice || maxPrice}<button class="chip on" onclick={() => setParams({min:null,max:null})}>{tr('EGP','ج.م')} {formatNumber(minPrice)} – {maxPrice ? formatNumber(maxPrice) : tr('any','بدون حد')}<X size={13}/></button>{/if}<button class="clear-all" onclick={() => { setParams({q:null,group:null,tag:null,seller:null,stock:null,min:null,max:null}); }}>{tr('Clear all','مسح الكل')}</button></div>{/if}
+  {#if tagsForGroup.length && !tag}<div class="tag-suggestions scroll-x"><span>{tr('Explore','اكتشف')}</span>{#each tagsForGroup as [t]}<button onclick={() => setParams({tag:t})}>{t}</button>{/each}</div>{/if}
+  {#if semBusy}<p class="ai-status" role="status"><LoaderCircle size={15} class="spin"/>{semProgress?.progress != null ? tr(`Preparing AI discovery · ${Math.round(semProgress.progress)}%`,`تجهيز البحث الذكي · ${Math.round(semProgress.progress)}%`) : tr('Finding related components…','جاري البحث عن قطع مشابهة…')}<span>{tr('Your regular results are ready below.','نتائج البحث العادي جاهزة بالأسفل.')}</span></p>{/if}
+  {#if semError}<p class="ai-status ai-error" role="status"><Info size={16}/>{tr('AI discovery is unavailable. Showing regular search results.','البحث الذكي غير متاح. بنعرض نتائج البحث العادي.')}<button onclick={() => setParams({ai:null})}>{tr('Turn off','إيقاف')}</button></p>{/if}
+  {#if catalog.loading}<div class="grid" aria-label={tr('Loading products','تحميل المكونات')} aria-busy="true">{#each Array(9) as _,i (i)}<div class="skeleton" style="height:320px"></div>{/each}</div>
+  {:else if !catalog.error && results.length===0}<div class="empty card"><div class="empty-icon"><PackageSearch size={38} strokeWidth={1.4}/></div><h3>{tr('No components found','مفيش نتائج للبحث ده')}</h3><p>{tr('Try a shorter part number, another spelling,','جرّب رقم قطعة أقصر أو كتابة مختلفة،')}<br/>{tr('or remove a filter to widen your search.','أو امسح فلتر عشان تظهر نتائج أكتر.')}</p><button class="btn primary" onclick={() => setParams({q:null,group:null,tag:null,seller:null,stock:null,min:null,max:null})}><RotateCcw size={15}/>{tr('Reset search & filters','مسح البحث والفلاتر')}</button><div class="example-searches"><span>{tr('Try','جرّب')}</span>{#each ['ESP32','Arduino','اردوينو'] as example}<button onclick={() => setParams({q:example,group:null,tag:null,seller:null,stock:null,min:null,max:null})}>{example}</button>{/each}</div></div>
+  {:else}<div class="grid">{#each shown as p (p.id)}<ProductCard product={p} {offerFilters}/>{/each}</div><div class="more"><span aria-live="polite">{tr(`Showing ${formatNumber(shown.length)} of ${formatNumber(results.length)} components`,`عرض ${formatNumber(shown.length)} من ${formatNumber(results.length)} قطعة`)}</span>{#if shown.length<results.length}<button class="btn" onclick={() => limit += 24}>{tr('Load more components','عرض مكونات أكتر')}<ChevronDown size={16}/></button>{/if}</div>{/if}
+ </section>
 </div>
-
-{#if filtersOpen}
-	<section class="card filters">
-		<label class="field">Seller
-			<select value={seller} onchange={(e) => setParams({ seller: e.currentTarget.value || null })}>
-				<option value="">any</option>
-				{#each catalog.sellers as s}<option value={s}>{sellerName(s)}</option>{/each}
-			</select>
-		</label>
-		<label class="field">Sort
-			<select value={sort} onchange={(e) => setParams({ sort: e.currentTarget.value === 'relevance' ? null : e.currentTarget.value })}>
-				<option value="relevance">relevance</option>
-				<option value="price-asc">price: low → high</option>
-				<option value="price-desc">price: high → low</option>
-				<option value="sellers">most sellers</option>
-				<option value="name">name</option>
-			</select>
-		</label>
-		<label class="field">Max price (EGP)
-			<input type="number" inputmode="numeric" min="0" step="10" value={maxPrice || ''} placeholder="any" onchange={(e) => setParams({ max: e.currentTarget.value || null })} />
-		</label>
-		<label class="field check"><input type="checkbox" checked={stock} onchange={(e) => setParams({ stock: e.currentTarget.checked ? '1' : null })} /> in stock only</label>
-		{#if activeFilters}<button class="btn" onclick={() => setParams({ tag: null, seller: null, stock: null, max: null, sort: null })}>Reset</button>{/if}
-	</section>
-{/if}
-
-{#if tagsForGroup.length}
-	<div class="scroll-x tags">
-		{#each tagsForGroup as [t, n] (t)}
-			<button class="chip ghost" class:on={t === tag} onclick={() => setParams({ tag: t === tag ? null : t })}>#{t} <span class="muted small">{n}</span></button>
-		{/each}
-	</div>
-{/if}
-
-{#if semError}<p class="card notice small">AI search unavailable: {semError}</p>{/if}
-
-{#if catalog.loading}
-	<div class="grid">{#each Array(12) as _, i (i)}<div class="skeleton" style="aspect-ratio: 3/4"></div>{/each}</div>
-{:else if results.length === 0 && catalog.index}
-	<div class="card empty">
-		<p><strong>No products match.</strong></p>
-		<p class="muted">Try fewer words, a part number, or turn on ✨ AI search for meaning-based results (works with Arabic queries too).</p>
-	</div>
-{:else}
-	<div class="grid">
-		{#each shown as p (p.id)}<ProductCard product={p} />{/each}
-	</div>
-	{#if shown.length < results.length}<div use:sentinel class="muted small more">showing {shown.length} of {results.length}…</div>{/if}
-{/if}
-
 <style>
-	.groups { margin: 0.25rem 0 0.6rem; }
-	.toolbar { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem; }
-	.count { flex: 1; display: flex; align-items: center; gap: 0.4rem; }
-	.filters { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 0.75rem; padding: 0.9rem; margin-bottom: 0.6rem; align-items: end; }
-	.check { flex-direction: row; align-items: center; gap: 0.5rem; color: var(--fg); min-height: 42px; }
-	.tags { margin-bottom: 0.75rem; }
-	.empty { padding: 1.5rem; text-align: center; }
-	.more { text-align: center; padding: 1.5rem; }
-	.notice { padding: 0.6rem 0.9rem; margin-bottom: 0.6rem; border-color: var(--bad); }
+ .discovery { display:flex; justify-content:space-between; align-items:center; overflow:hidden; border:1px solid #deebe5; background:linear-gradient(110deg,#edf5ef,#f0f6f1 65%,#e6f1ed); border-radius:20px; min-height:278px; padding:34px 42px; position:relative; }.hero-copy { z-index:1; }.eyebrow { display:flex; align-items:center; gap:8px; font-size:10px; font-weight:700; letter-spacing:1.8px; color:#427064; margin-bottom:16px; }.dot { width:6px; height:6px; border-radius:50%; background:var(--accent); }h1 { font-size:44px; line-height:1.04; font-weight:750; letter-spacing:-1.9px; }h1 span { color:var(--accent); }.hero-copy>p { color:#596f68; margin-top:14px; font-size:13px; }.mobile-break { display:none; }.hero-stats { display:flex; align-items:center; gap:15px; margin-top:24px; font-size:11px; color:#647970; }.hero-stats>span { display:flex; align-items:center; gap:6px; }.hero-stats strong { color:#2b4f43; }.hero-stats i { height:13px; width:1px; background:#cfdfd4; }.hero-note { margin-left:8px; }.hero-art { width:410px; height:255px; position:relative; margin:-25px 20px -25px 0; flex-shrink:0; }.orbit { position:absolute; border:1px solid #c8ddd180; border-radius:50%; }.orbit-one { width:290px; height:290px; left:55px; top:-15px; }.orbit-two { width:390px; height:390px; left:5px; top:-65px; }.board { position:absolute; width:188px; height:198px; top:20px; left:116px; padding:16px; border-radius:16px; background:#176458; transform:rotate(-13deg); box-shadow:0 18px 25px #24594229,inset 0 0 0 5px #397d62,inset 0 0 0 6px #a1b68b; color:#c6dec5; }.board::before,.board::after { content:''; position:absolute; width:7px; height:7px; background:#d9e5c1; border:2px solid #95ab7b; border-radius:50%; bottom:11px; }.board::before { left:11px; }.board::after { right:11px; }.board-top,.board-bottom { display:flex; align-items:center; justify-content:space-between; font-family:monospace; font-size:7px; letter-spacing:1px; }.board-traces { height:120px; display:grid; place-items:center; background:repeating-linear-gradient(90deg,transparent 0,transparent 18px,#80a98850 19px,transparent 20px); }.chip-core { background:#243b37; color:#cad9b5; padding:4px; border:3px solid #92a482; box-shadow:0 0 0 5px #244f41; }.board-led { position:absolute; background:#dcefa5; width:5px; height:9px; right:23px; bottom:42px; box-shadow:0 0 8px #dcefa5; }.pins { position:absolute; left:30px; right:30px; height:8px; bottom:-7px; background:repeating-linear-gradient(90deg,#bda878 0,#bda878 5px,transparent 5px,transparent 10px); }.floating { position:absolute; background:#ffffffec; border:1px solid #d9e5dd; border-radius:13px; display:flex; flex-direction:column; align-items:center; gap:7px; padding:15px; font-size:7px; letter-spacing:1px; color:#528579; box-shadow:0 10px 20px #24594207; }.sensor { left:38px; top:28px; transform:rotate(-6deg); }.power { right:9px; top:123px; transform:rotate(7deg); color:#998651; }.found { position:absolute; bottom:5px; left:90px; display:flex; align-items:center; gap:8px; background:white; border-radius:8px; padding:9px 12px; font-size:10px; box-shadow:0 5px 16px #24594212; color:#4f685e; }.found>span { display:grid; place-items:center; background:var(--accent-soft); border-radius:50%; width:20px; height:20px; color:var(--accent); }
+ .quick-categories { margin:22px 0 30px; gap:10px; }.quick-categories button { display:flex; align-items:center; gap:9px; padding:12px 16px; border:1px solid var(--line); background:white; border-radius:10px; white-space:nowrap; font-size:12px; font-weight:500; }.quick-categories button.on { border-color:var(--accent); background:var(--accent); color:white; }.quick-categories button:hover { border-color:var(--accent); }
+ .catalog-layout { display:grid; grid-template-columns:232px minmax(0,1fr); gap:30px; }aside { align-self:start; }.filter-heading { display:flex; align-items:center; justify-content:space-between; padding-bottom:20px; border-bottom:1px solid var(--line); }.filter-heading h2 { display:flex; align-items:center; gap:8px; font-size:15px; }.filter-count { background:var(--accent-soft); color:var(--accent); padding:2px 6px; font-size:10px; border-radius:4px; }.reset,.clear-all { font-size:11px; color:var(--accent); }.reset:disabled { opacity:.4; cursor:default; }.filter-section { padding:20px 0; border-bottom:1px solid var(--line); }.filter-section h3 { font-size:12px; font-weight:650; margin-bottom:12px; display:flex; justify-content:space-between; }.filter-section h3>span { font-size:10px; color:var(--muted); font-weight:400; }.category-list { display:flex; flex-direction:column; gap:3px; }.category-list>button { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:9px 8px; border-radius:7px; font-size:11px; color:#5b6874; text-align:start; }.category-list>button>span { display:flex; align-items:center; gap:8px; }.category-list small { font-size:10px; color:#7a8791; }.category-list>button:hover { background:#edf0f2; }.category-list>button.chosen { background:var(--accent-soft); color:var(--accent); font-weight:600; }.text-action { color:var(--accent); display:flex; align-items:center; gap:6px; font-size:11px; padding:12px 8px 0; }.stock-check { display:flex; align-items:center; gap:10px; font-size:12px; cursor:pointer; }.stock-check small { display:block; color:var(--muted); font-size:10px; margin-top:2px; }.status-dot { width:6px; height:6px; border-radius:50%; background:#438763; margin-inline-start:auto; }.price-inputs { display:flex; align-items:flex-end; gap:8px; }.price-inputs label { width:calc(50% - 12px); font-size:10px; }.range-dash { align-self:flex-end; margin-bottom:11px; color:var(--muted); }.price-inputs input { min-width:0; font-size:12px; }.apply-price { display:flex; align-items:center; justify-content:space-between; width:100%; color:var(--accent); font-size:11px; font-weight:600; margin:12px 0; }.price-error { color:var(--bad); font-size:11px; margin-top:8px; }.price-presets { display:flex; gap:5px; flex-wrap:wrap; }.price-presets button { border:1px solid var(--line); font-size:9px; padding:5px 7px; border-radius:5px; color:var(--muted); }.price-presets button.chosen { border-color:var(--accent); color:var(--accent); }.seller-field>span { color:var(--fg); font-weight:650; }.seller-field select { font-size:11px; }.filter-tip { display:flex; align-items:flex-start; gap:8px; padding:16px 0; color:#83908d; }.filter-tip :global(svg) { flex-shrink:0; }.filter-tip p { font-size:10px; line-height:1.65; }.mobile-done,.mobile-filter { display:none; }
+ .results { min-width:0; }.results-header { display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:17px; }.section-kicker { font-size:9px; letter-spacing:1.6px; font-weight:600; color:#86929c; margin-bottom:7px; }.results-header h2 { font-size:22px; overflow-wrap:anywhere; }.results-header h2>span { display:inline-block; vertical-align:middle; font-size:10px; letter-spacing:0; font-weight:400; color:var(--muted); margin-inline-start:12px; }.sort-control { display:flex; align-items:center; gap:8px; padding:9px 10px; background:white; border:1px solid var(--line); border-radius:8px; color:var(--muted); flex-shrink:0; }.sort-control select { background:none; border:0; color:var(--fg); font-size:11px; max-width:155px; }.search-tools { display:flex; align-items:center; gap:10px; border-top:1px solid var(--line); border-bottom:1px solid var(--line); padding:11px 0; margin-bottom:14px; }.ai-toggle { display:flex; align-items:center; gap:7px; font-size:11px; color:#657082; }.ai-toggle.enabled { color:var(--accent); }.toggle-track { display:flex; align-items:center; width:27px; height:16px; background:#d9dfe3; padding:2px; border-radius:20px; margin-left:3px; }.toggle-track>span { height:12px; width:12px; border-radius:50%; background:white; box-shadow:0 1px 2px #0002; }.enabled .toggle-track { background:var(--accent); }.enabled .toggle-track>span { transform:translateX(11px); }.ai-explainer { color:var(--muted); font-size:10px; }.private-note { color:#859099; margin-inline-start:auto; font-size:10px; }.active-filters { display:flex; align-items:center; flex-wrap:wrap; gap:7px; margin-bottom:14px; }.active-filters .chip { font-size:10px; }.tag-suggestions { margin:0 0 16px; align-items:center; gap:8px; }.tag-suggestions>span { font-size:10px; color:var(--muted); margin-inline-end:3px; }.tag-suggestions button { font-size:10px; white-space:nowrap; color:#687782; border:1px solid #e1e7eb; padding:4px 9px; border-radius:5px; }.tag-suggestions button:hover { color:var(--accent); border-color:var(--accent); }.ai-status { display:flex; align-items:center; flex-wrap:wrap; gap:8px; padding:12px; background:var(--accent-soft); border-radius:8px; margin-bottom:14px; color:var(--accent); font-size:12px; }.ai-status>span { color:var(--muted); }.ai-error { background:var(--warn-soft); color:#765f26; }.ai-error button { text-decoration:underline; }.empty { text-align:center; padding:60px 16px; }.empty-icon { color:var(--accent); background:var(--accent-soft); width:76px; height:76px; display:grid; place-items:center; border-radius:22px; margin:0 auto 22px; }.empty h3 { font-size:23px; }.empty p { color:var(--muted); font-size:13px; margin:12px 0 22px; }.example-searches { display:flex; gap:12px; justify-content:center; margin-top:22px; font-size:12px; }.example-searches span { color:var(--muted); }.example-searches button { color:var(--accent); text-decoration:underline; }.more { display:flex; flex-direction:column; align-items:center; gap:15px; padding:30px 0 10px; color:var(--muted); font-size:11px; }.more .btn { min-width:220px; color:var(--fg); }
+ @media(min-width:1350px) { .results :global(.grid) { grid-template-columns:repeat(4,minmax(0,1fr)); } }
+ @media(max-width:1100px) { .catalog-layout { grid-template-columns:210px minmax(0,1fr); gap:22px; }.hero-art { margin-right:-30px; transform:scale(.9); }.hero-note { display:none!important; }.discovery { padding:30px; }.private-note { display:none; }.results-header h2>span { display:block; margin:7px 0 0; } }
+ @media(max-width:850px) { .catalog-layout { grid-template-columns:minmax(0,1fr); }aside { display:none; }aside.expanded { display:block; background:white; padding:20px; border:1px solid var(--line); border-radius:12px; }.mobile-done { display:flex; width:100%; }.mobile-filter { display:inline-flex; }.hero-art { transform:scale(.8); margin-left:-40px; margin-right:-60px; }.hero-copy { flex-shrink:0; }h1 { font-size:38px; }.quick-categories { margin:18px 0 24px; } }
+ @media(max-width:600px) { .discovery { padding:25px 22px; min-height:250px; }.hero-art { display:none; }h1 { font-size:39px; }.eyebrow { font-size:8px; letter-spacing:1.3px; }.hero-stats { gap:12px; font-size:10px; }.hero-copy>p { font-size:12px; }.mobile-break { display:block; }.hero-stats { margin-top:20px; }.quick-categories button { padding:10px 12px; font-size:11px; }.results-header h2 { font-size:19px; }.sort-control { gap:5px; padding:8px; }.sort-control select { max-width:115px; font-size:10px; }.section-kicker { font-size:8px; }.ai-explainer { display:none; }.search-tools { justify-content:space-between; }.results :global(.grid) { gap:10px; } }
 </style>

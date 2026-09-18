@@ -212,13 +212,28 @@ def block_key(raw: str) -> str:
     return max(with_digit or toks, key=len)
 
 
+def accessory_signature(raw: str) -> frozenset[str]:
+    """Accessory nouns must not disappear merely because long names look similar."""
+    return frozenset(
+        re.findall(r"\b(?:pcb|shield|case|enclosure|relay|expansion|breakout)\b", clean(raw))
+    )
+
+
 # --------------------------------------------------------------------------- canonical rules
 # (pattern, canonical name, tags[, unless]). First match wins; `unless` is tested against
 # the whole cleaned name so accessories / chips / variants never collapse into the board.
 _BOARD_ACCESSORY = re.compile(
     r"\b(shield|case|cable|kit|proto|bootloader|atmega|chip|programmed|sticker|holder|enclosure|"
     r"box|cover|mount|acrylic|adapter|connector|screw|jumper|sensor|display|module|expansion|"
-    r"terminal|breakout|header|usb|power supply|clone kit)\b"
+    r"terminal|breakout|header|pcb|relay|lcd|tft|work area|diy|power supply|clone kit)\b"
+)
+_BOARD_VARIANT = re.compile(
+    r"\b(compatible|weact|cytron|lilygo|ttgo|wemos|maker-pi|bare|qfn\d*|smd)\b"
+)
+_ESP32_VARIANT = re.compile(
+    r"\b(?:s[23]|c[236]|h2|p4)(?:\b|[- ]?\d)|\besp32[- ]?(?:s[23]|c[236]|h2|p4)|"
+    r"\b(?:wrover|devkitc|mini|ethernet|lora|camera|uno|lan\d+|n\d+r\d+)|"
+    r"\bwroom-?32[deu]\b|\b\d+[- ]*(?:pin|mb|gb)\b|\b(?:cp2102|ch340g?|attendance|access control)\b"
 )
 CANONICAL_RULES: list[tuple] = [
     (
@@ -240,32 +255,41 @@ CANONICAL_RULES: list[tuple] = [
         re.compile(_BOARD_ACCESSORY.pattern + r"|\b(every|33|esp32|rp2040|ble|iot)\b"),
     ),
     (re.compile(r"\barduino\s*leonardo\b"), "Arduino Leonardo", ("arduino", "avr", "dev-board")),
-    (re.compile(r"\barduino\s*pro\s*mini\b"), "Arduino Pro Mini", ("arduino", "avr", "dev-board")),
+    (
+        re.compile(r"\barduino\s*pro\s*mini\b"),
+        "Arduino Pro Mini",
+        ("arduino", "avr", "dev-board"),
+        re.compile(r"\b\d+(?:\.\d+)?(?:v|mhz)\b"),
+    ),
     (
         re.compile(r"\bnodemcu\b.*\besp8266\b|\besp8266\b.*\bnodemcu\b"),
         "NodeMCU ESP8266 (ESP-12E)",
         ("esp8266", "wifi", "dev-board"),
     ),
-    (re.compile(r"\besp32[- ]?cam\b"), "ESP32-CAM", ("esp32", "wifi", "camera", "dev-board")),
     (
-        re.compile(
-            r"\besp32\b.*\b(devkit|dev kit|development board|wroom-32)\b(?!.*(s2|s3|c3|c6))"
-        ),
-        "ESP32 DevKit V1 (WROOM-32)",
-        ("esp32", "wifi", "bluetooth", "dev-board"),
+        re.compile(r"\besp32[- ]?cam\b"),
+        "ESP32-CAM",
+        ("esp32", "wifi", "camera", "dev-board"),
+        re.compile(r"\b(?:mb|programmer|downloader)\b"),
     ),
     (
-        re.compile(r"\besp32[- ]?s3\b.*\b(devkit|dev kit|development board)\b"),
+        re.compile(r"\besp32\b.*\b(devkit|dev kit|development board)\b"),
+        "ESP32 DevKit V1 (WROOM-32)",
+        ("esp32", "wifi", "bluetooth", "dev-board"),
+        _ESP32_VARIANT,
+    ),
+    (
+        re.compile(r"^esp32[- ]?s3 devkitc$"),
         "ESP32-S3 DevKitC",
         ("esp32", "wifi", "bluetooth", "dev-board"),
     ),
     (
-        re.compile(r"\besp32[- ]?c3\b.*\b(devkit|dev kit|development board|super mini)\b"),
+        re.compile(r"^esp32[- ]?c3 devkit$"),
         "ESP32-C3 DevKit",
         ("esp32", "wifi", "bluetooth", "dev-board"),
     ),
     (
-        re.compile(r"\bstm32f103c8t6\b|\bblue pill\b"),
+        re.compile(r"\bstm32f103c8t6\b.*\bboard\b|\bblue pill\b"),
         "STM32F103C8T6 Blue Pill",
         ("stm32", "arm", "dev-board"),
     ),
@@ -273,6 +297,7 @@ CANONICAL_RULES: list[tuple] = [
         re.compile(r"\bstm32f411\b.*black pill|\bblack pill\b"),
         "STM32F411 Black Pill",
         ("stm32", "arm", "dev-board"),
+        re.compile(r"\bstm32f401\w*\b"),
     ),
     (
         re.compile(r"\braspberry pi\s*pico\s*w\b"),
@@ -280,7 +305,7 @@ CANONICAL_RULES: list[tuple] = [
         ("raspberry-pi", "rp2040", "wifi", "dev-board"),
     ),
     (
-        re.compile(r"\braspberry pi\s*pico\s*2\b"),
+        re.compile(r"\braspberry pi\s*pico\s*2\b(?!.*\bw\b)"),
         "Raspberry Pi Pico 2",
         ("raspberry-pi", "rp2350", "dev-board"),
     ),
@@ -460,11 +485,25 @@ def has_arabic(s: str) -> bool:
 def canonical_rule(raw: str) -> tuple[str, tuple[str, ...]] | None:
     """Return (canonical_name, tags) when a hand-written rule recognises the product."""
     c = clean(raw)
+    # Bare PCBs and boards integrating named peripherals are not those peripherals.
+    if re.search(r"\bpcb\b", c):
+        return None
+    board_family = re.search(r"\b(?:esp32|esp8266|arduino|raspberry pi|stm32)\b", c)
     for pat, name, tags, *rest in CANONICAL_RULES:
+        if ("dev-board" in tags or "sbc" in tags) and (
+            _BOARD_ACCESSORY.search(c) or _BOARD_VARIANT.search(c)
+        ):
+            continue
         unless = rest[0] if rest else None
         if unless is not None and unless.search(c):
             continue
         if m := pat.search(c):
+            if (
+                board_family
+                and not {"dev-board", "sbc"}.intersection(tags)
+                and m.start() > board_family.start()
+            ):
+                continue
             if "{0}" not in name:
                 return name, tags
             groups = [g for g in m.groups() if g and g.isdigit()]
