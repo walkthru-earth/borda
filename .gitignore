@@ -18,4 +18,4 @@ dist/
 frontend/node_modules/
 frontend/.svelte-kit/
 frontend/build/
-frontend/static/data/
+frontend/static/data
