@@ -132,7 +132,76 @@ def test_build_model_hetzner_requires_token(monkeypatch):
     m = build_model("hetzner:Qwen/Qwen3.6-35B-A3B-FP8")
     assert m.model_name == "Qwen/Qwen3.6-35B-A3B-FP8"
     assert m.settings["extra_body"]["chat_template_kwargs"]["enable_thinking"] is False
+    # vLLM-served Qwen rejects a second leading system message (HTTP 400
+    # "System message must be at the beginning."); the profile must merge them.
+    assert m.profile["openai_chat_supports_multiple_system_messages"] is False
     assert build_model("openai:gpt-5-mini") == "openai:gpt-5-mini"
+
+
+async def test_hetzner_request_carries_exactly_one_leading_system_message(monkeypatch):
+    """Regression for the September 2026 runs: static INSTRUCTIONS + the dynamic market
+    context were sent as two `system` turns and every batch failed with HTTP 400."""
+    import httpx2
+    from pydantic_ai import models
+
+    monkeypatch.setenv("HETZNER_INFERENCE_TOKEN", "x")
+    seen: list[dict] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        body = json.loads(request.content)
+        seen.append(body)
+        tool = body["tools"][0]["function"]["name"]
+        items = [{"key": "a", "canonical_name": "Part A", "description": "d", "tags": []}]
+        return httpx2.Response(
+            200,
+            json={
+                "id": "chatcmpl-1",
+                "object": "chat.completion",
+                "created": 0,
+                "model": body["model"],
+                "choices": [
+                    {
+                        "index": 0,
+                        "finish_reason": "tool_calls",
+                        "message": {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": [
+                                {
+                                    "id": "call_1",
+                                    "type": "function",
+                                    "function": {
+                                        "name": tool,
+                                        "arguments": json.dumps({"items": items}),
+                                    },
+                                }
+                            ],
+                        },
+                    }
+                ],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+
+    model = build_model(
+        "hetzner:Qwen/Qwen3.6-35B-A3B-FP8",
+        http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(handler)),
+    )
+    with models.override_allow_model_requests(True):  # the "request" only reaches the mock
+        result = await enrichment_agent.run(
+            '{"key":"a","names":["part a"]}',
+            model=model,
+            deps=BatchDeps(expected_keys=frozenset({"a"})),
+        )
+    assert result.output.items[0].canonical_name == "Part A"
+    (body,) = seen
+    roles = [m["role"] for m in body["messages"]]
+    assert roles == ["system", "user"], roles
+    system = body["messages"][0]["content"]
+    assert "You normalise product listings" in system and "Market: Egypt (EG)" in system
+    assert body["chat_template_kwargs"] == {"enable_thinking": False}
+    assert body["temperature"] == 0.0 and body["max_completion_tokens"] == 24000
+    assert body["tool_choice"] == "required"  # structured output via the result tool
 
 
 def test_enrichment_model_normalises_tags():
@@ -430,3 +499,129 @@ async def test_ai_cannot_merge_conflicting_explicit_variants(tmp_path, names, pr
         requests_per_minute=10_000,
     ).enrich(catalog)
     assert len(catalog.products) == 2 and report.merged == 0
+
+
+@pytest.mark.parametrize(
+    ("canonical", "raw"),
+    [
+        ("1-Channel 12V SSR Module", "1 Channel 12V Solid State Relay Active Low SSR Module"),
+        ("2-Pin Pluggable Terminal Block 3.81mm", "2 pin pluggable PCB terminal block 3.81mm"),
+        ("Raspberry Pi 2 Model B", "1GB E14 Version Raspberry Pi 2"),
+        ("W25Q32 Flash Memory 32Mbit SOIC-8", "25Q32 Flash Memory 32Mbit 4MB SOIC-8 SMD"),
+    ],
+)
+async def test_keeping_the_current_name_is_never_an_identity_conflict(tmp_path, canonical, raw):
+    """Regression: replayed cache rows / answers that *confirm* our canonical name were
+    rejected because a seller spelling in raw_names mentioned relay, PCB or a memory size –
+    the products stayed unenriched and were re-sent to the model every run."""
+    from borda.models import Product
+
+    catalog = Catalog.from_products(
+        [Product(id="part", canonical_name=canonical, raw_names=[raw, canonical])]
+    )
+    report = await Enricher(
+        ParquetStore(tmp_path), model=_fake_llm({"part": canonical}), requests_per_minute=10_000
+    ).enrich(catalog)
+    product = catalog.products["part"]
+    assert report.enriched == 1 and product.enriched
+    assert product.canonical_name == canonical and product.description == "desc part"
+    assert raw in product.raw_names
+
+
+async def test_renaming_away_from_an_explicit_variant_is_still_rejected(tmp_path):
+    from borda.models import Product
+
+    catalog = Catalog.from_products(
+        [Product(id="pi", canonical_name="Raspberry Pi 4 4GB", raw_names=["Raspberry Pi 4 4GB"])]
+    )
+    report = await Enricher(
+        ParquetStore(tmp_path),
+        model=_fake_llm({"pi": "Raspberry Pi 4"}),
+        requests_per_minute=10_000,
+    ).enrich(catalog)
+    assert report.enriched == 0 and catalog.products["pi"].canonical_name == "Raspberry Pi 4 4GB"
+
+
+def _slow_llm(delay_s: float, inflight: list[int]):
+    """Async FunctionModel that records how many requests overlap."""
+    import asyncio
+
+    current = 0
+
+    async def respond(messages, info):
+        nonlocal current
+        current += 1
+        inflight.append(current)
+        try:
+            await asyncio.sleep(delay_s)
+        finally:
+            current -= 1
+        keys = [
+            json.loads(line)["key"]
+            for line in str(messages[-1].parts[-1].content).splitlines()
+            if line.startswith("{")
+        ]
+        items = [{"key": k, "canonical_name": k, "description": "d", "tags": []} for k in keys]
+        return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, {"items": items})])
+
+    return FunctionModel(respond)
+
+
+async def test_batches_run_concurrently_within_the_window(tmp_path):
+    from borda.models import Product
+
+    catalog = Catalog.from_products(
+        [Product(id=f"p{i}", canonical_name=f"Part {i}") for i in range(6)]
+    )
+    inflight: list[int] = []
+    report = await Enricher(
+        ParquetStore(tmp_path),
+        model=_slow_llm(0.02, inflight),
+        requests_per_minute=100_000,
+        concurrency=3,
+        time_budget_s=0,
+    ).enrich(catalog, batch_size=1)
+    assert report.enriched == 6 and report.batches == 6 and report.deferred == 0
+    assert max(inflight) == 3  # never more than the window, and the window is actually used
+    assert len(ParquetStore(tmp_path).read_enrichment()) == 6
+
+
+async def test_time_budget_defers_unsent_batches_but_keeps_inflight_answers(tmp_path):
+    from borda.models import Product
+
+    catalog = Catalog.from_products(
+        [Product(id=f"p{i}", canonical_name=f"Part {i}") for i in range(4)]
+    )
+    inflight: list[int] = []
+    report = await Enricher(
+        ParquetStore(tmp_path),
+        model=_slow_llm(0.05, inflight),
+        requests_per_minute=100_000,
+        concurrency=1,
+        time_budget_s=0.01,  # expires while the first batch is still generating
+    ).enrich(catalog, batch_size=1)
+    assert report.batches == 1 and report.enriched == 1
+    assert report.deferred == 3 and report.requested == 4
+    assert catalog.products["p0"].enriched and not catalog.products["p3"].enriched
+    assert report.error is None  # running out of budget is not a failure
+
+
+async def test_rate_limiter_gives_concurrent_callers_distinct_slots():
+    import asyncio
+    import time
+
+    from borda.enrich.ai import RateLimiter
+
+    limiter = RateLimiter(n=600, window_s=60)  # 0.1 s apart
+    t0 = time.monotonic()
+    stamps: list[float] = []
+
+    async def hit():
+        await limiter.wait()
+        stamps.append(time.monotonic() - t0)
+
+    await asyncio.gather(hit(), hit(), hit())
+    stamps.sort()
+    assert stamps[1] - stamps[0] >= 0.09 and stamps[2] - stamps[1] >= 0.09
+    limiter.penalize(5)
+    assert limiter._next >= time.monotonic() + 4.5

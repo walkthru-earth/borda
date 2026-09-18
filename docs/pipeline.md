@@ -101,8 +101,10 @@ subclass `BaseScraper` (yield `RawOffer`) and register it in `scrapers/__init__.
    hash suffix only on collision).
 3. Provenance: every raw name, seller and listing URL is kept on the product.
 4. Pydantic AI (`enrich/ai.py`) corrects the name to the manufacturer's original, writes a
-   one-line description and tags; identical official names are **merged** (redirect recorded);
-   products created in the same run get their id re-slugged from the official name.
+   2-3 sentence description, up to 6 spec highlights, MPN, brand, taxonomy group and tags, plus
+   Arabic translations of name/description/specs; identical official names are **merged**
+   (redirect recorded); products created in the same run get their id re-slugged from the
+   official name.
 
 Board rules are conservative: ESP32 chipsets, memory and pin variants, USB bridge variants,
 compatible boards, and integrated application boards retain their specific listing names.
@@ -132,9 +134,37 @@ a `version`; bumping `ENRICHMENT_VERSION` refreshes older answers once (≤ item
 
 ## Enrichment model
 
-Default: Hetzner Inference (OpenAI-compatible) `hetzner:Qwen/Qwen3.6-35B-A3B-FP8`, tool-call
-structured output, thinking disabled (`chat_template_kwargs.enable_thinking=false`), paced to
-8 req/min, ≤5000 products/run, batch 20. Any Pydantic AI `provider:model` string works too
-(`BORDA_AI_MODEL=openai:gpt-5-mini`). Missing credentials → enrichment is skipped, run continues.
+Default: Hetzner Inference (OpenAI-compatible, experimental, EU-hosted)
+`hetzner:Qwen/Qwen3.6-35B-A3B-FP8`, tool-call structured output (`tool_choice=required`),
+thinking disabled (`chat_template_kwargs.enable_thinking=false`, measured `reasoning_tokens=0`).
+Any Pydantic AI `provider:model` string works too (`BORDA_AI_MODEL=openai:gpt-5-mini`).
+Missing credentials → enrichment is skipped, run continues.
+
+Hetzner's documented limits per API key are **10 requests, 4M input tokens and 100k output
+tokens per 60 s** (HTTP 429 beyond); the model list is served by `/v1/models` and currently
+contains Qwen3.6-35B-A3B and Qwen3.8-27B. A 20-item bilingual batch costs ~7k output tokens
+and roughly a minute of generation, so the pacing is:
+
+| setting | default | why |
+|---|---|---|
+| `BORDA_AI_BATCH_SIZE` | 20 | fits `max_tokens=24000` with EN + AR descriptions and specs |
+| `BORDA_AI_REQUESTS_PER_MINUTE` | 8 | headroom under the 10/min cap for validator retries |
+| `BORDA_AI_CONCURRENCY` | 3 | generation time is the bottleneck, not the request quota; 3 × ~7k tokens/min stays far under 100k |
+| `BORDA_AI_TIME_BUDGET_MIN` | 100 | stop launching batches so the 170-min job always persists and commits; in-flight batches finish, the rest are reported as `deferred` and queued next run (0 = unlimited) |
+| `BORDA_AI_MAX_ITEMS_PER_RUN` | 5000 | hard cap on products sent per run |
+
+The endpoint serves the open-weight models through vLLM, whose Qwen chat template rejects more
+than one leading `system` message (`400 System message must be at the beginning.`). The agent has
+two instruction sources (the static prompt plus the per-profile market context), so `build_model`
+uses Pydantic AI's vLLM model profile with `openai_chat_supports_multiple_system_messages=False`,
+which merges them into one system turn – see
+[pydantic/pydantic-ai#5812](https://github.com/pydantic/pydantic-ai/issues/5812). A wire-level
+regression test asserts the request carries exactly `system, user`.
+
+Failures are best-effort per batch: a failed batch is logged and its products retried next run;
+after three failures with nothing enriched the run stops calling the model. HTTP 429 pushes the
+pacer back 60 s. Answers that would rename a product across an identity boundary (accessory noun,
+memory/pin/chipset/revision variant) are rejected and not cached; confirming the *current*
+canonical name is never treated as an identity change, so cached rows replay cleanly.
 
 See [Arabic content and optional AI discovery](frontend.md) for cached translations, embedding compatibility and browser behavior.

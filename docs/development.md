@@ -51,19 +51,37 @@ when only derived exports need refreshing.
 ## GitHub Actions
 
 - `monthly-scrape.yml` – cron on the 1st: uv (cached) → pytest → scrape → … → commit `data/` +
-  `diagnostics/` → upload logs as artifact → job summary table; turns red only if a store failed
-  (data is still committed). Secrets: `HETZNER_INFERENCE_TOKEN`, optional `BORDA_PROXY_URL`.
+  `diagnostics/` → upload logs as artifact → job summary table. Data is committed whenever at
+  least one store succeeded; the job then turns red only if a store failed **or enrichment was
+  requested but produced nothing with an error** (the model/endpoint contract broke – e.g. every
+  batch answering HTTP 400). Secrets: `HETZNER_INFERENCE_TOKEN`, optional `BORDA_PROXY_URL`.
   Manual dispatch accepts `stores`, `max_pages`, `ai`, `fresh`. This workflow explicitly uses
   `BORDA_PROFILE=egypt` to maintain the default published snapshot. Custom-country jobs must
   select their profile and corresponding data/diagnostic paths separately.
   - **Logs:** every phase is a collapsible `::group::` with its duration; stores log progress every
-    10 pages; enrichment logs every 5 batches; failures surface as `::error::`/`::warning::`
-    annotations and in the step summary; the full log is the `diagnostics-<run>` artifact.
+    10 pages; enrichment logs every 5 batches with items/min; failures surface as
+    `::error::`/`::warning::` annotations and in the step summary (enrichment line shows
+    requested / enriched / cached / stale / failed / deferred and the last error); the full log is
+    the `diagnostics-<run>` artifact.
+  - **Time budget:** enrichment stops *launching* batches after `BORDA_AI_TIME_BUDGET_MIN`
+    (default 100) so the 170-min job always reaches persist + commit; in-flight batches are still
+    applied and the summary reports the deferred count. Deferred products are queued again
+    next month. The enrichment cache (`data/enrichment.parquet`) is committed with
+    the run, so progress is never lost even if the checkpoint below has expired.
   - **Checkpoints / resume:** `.cache/checkpoints/egypt/<profile-fingerprint>/<YYYY-MM>/` keeps each finished store's raw
     offers and a mirror of the LLM cache after every batch. The cache is saved with
     `if: always()`, so after a failure or the 170-min timeout, **"Re-run failed jobs"** (or the
     next dispatch that month) skips finished stores and already-enriched products and continues.
-    Cleared automatically once a run persists. `--fresh` / `fresh=true` ignores it.
+    Cleared automatically once a run persists. `--fresh` / `fresh=true` ignores it. Fetched pages
+    are also cached (`BORDA_HTTP_CACHE_TTL_H`, 20 h), so a retry the same day re-parses instead
+    of re-downloading; the monthly cron is always outside that window.
+  - **Run history (Sept 2026 bring-up):** run 1 enriched 1,500 products (sequential, ~25
+    items/min); run 2 was cancelled by hand after 2 h at batch 85/150 (the timeout would have
+    hit before 6,000 items); runs 3–5 scraped fine but every enrichment batch failed with
+    `System message must be at the beginning.` because the Borda refactor added a second
+    (dynamic) instructions block that Hetzner's vLLM chat template rejects. Fixed by the vLLM
+    model profile in `enrich/ai.py`, covered by `tests/test_enrich.py`, and now caught by the
+    red-job gate above.
 - `ci.yml` – installed `borda --help` smoke test, ruff + pytest, Node 24 search/filter regression tests (`pnpm test`), svelte-check + build.
 - `deploy-pages.yml` – rebuilds the SPA with the latest Parquet after each data commit.
 

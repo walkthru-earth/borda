@@ -8,7 +8,14 @@ Token/cost discipline:
 * an `output_validator` makes the model retry when it forgets/invents keys
 * Qwen "thinking" is disabled (`chat_template_kwargs.enable_thinking=false`) – it would
   otherwise spend the whole output budget on hidden reasoning
-* requests are paced to the provider's rate limit (Hetzner: 10 req / 60 s)
+* requests are paced to the provider's rate limit (Hetzner: 10 req / 60 s, 100k output
+  tokens / 60 s) and a few batches run concurrently – generation time, not the request
+  quota, is the bottleneck (~1 min per 20-item bilingual batch)
+* a wall-clock budget stops launching new batches so the surrounding job always finishes and
+  persists what it has; the remaining products are picked up by the next run
+* the Hetzner endpoint serves Qwen through vLLM, whose chat template rejects more than one
+  leading `system` message – Pydantic AI's vLLM profile merges the static and dynamic
+  instructions into a single system message (pydantic/pydantic-ai#5812)
 """
 
 from __future__ import annotations
@@ -21,12 +28,16 @@ import shutil
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent, ModelRetry, RunContext
 from pydantic_ai.models import Model
 from pydantic_ai.models.openai import OpenAIChatModel, OpenAIChatModelSettings
+from pydantic_ai.profiles import merge_profile
+from pydantic_ai.profiles.openai import OpenAIModelProfile
 from pydantic_ai.providers.openai import OpenAIProvider
+from pydantic_ai.providers.vllm import VLLMProvider
 
 from ..config import settings
 from ..models import ENRICHMENT_VERSION, Enrichment, Product, utcnow
@@ -36,6 +47,9 @@ from ..normalize.categories import assign_group
 from ..profiles import PublicProfile, default_profile
 from ..storage import ParquetStore
 from ..storage.parquet import read_enrichment_file
+
+if TYPE_CHECKING:
+    import httpx2  # transport used by the OpenAI SDK; only needed for type hints here
 
 log = logging.getLogger(__name__)
 
@@ -136,17 +150,37 @@ async def _keys_match(ctx: RunContext[BatchDeps], out: EnrichmentBatch) -> Enric
     return out
 
 
-def build_model(name: str | None = None) -> Model | str:
+def hetzner_profile(model_name: str) -> OpenAIModelProfile:
+    """Model profile for Hetzner Inference: the open-weight models are served through vLLM,
+    so start from Pydantic AI's vLLM profile (Qwen/… schema handling, thinking support) and
+    pin the one setting this run cannot live without – a single leading system message.
+    Without it the static `INSTRUCTIONS` and the dynamic market-context instructions are sent
+    as two `system` turns and the chat template answers HTTP 400
+    `System message must be at the beginning.`"""
+    return merge_profile(
+        VLLMProvider.model_profile(model_name),
+        OpenAIModelProfile(openai_chat_supports_multiple_system_messages=False),
+    )
+
+
+def build_model(
+    name: str | None = None, *, http_client: httpx2.AsyncClient | None = None
+) -> Model | str:
     """`hetzner:<model>` -> Hetzner Inference (OpenAI-compatible); anything else is passed to
-    Pydantic AI's `provider:model` inference (openai:, anthropic:, google-gla:, test, ...)."""
+    Pydantic AI's `provider:model` inference (openai:, anthropic:, google-gla:, test, ...).
+    `http_client` lets tests capture the exact request the endpoint would receive."""
     name = name or settings.ai_model
     if name.startswith("hetzner:"):
         token = os.environ.get("HETZNER_INFERENCE_TOKEN") or settings.hetzner_token
         if not token:
             raise RuntimeError("HETZNER_INFERENCE_TOKEN is not set")
+        model_name = name.split(":", 1)[1]
         return OpenAIChatModel(
-            name.split(":", 1)[1],
-            provider=OpenAIProvider(base_url=settings.hetzner_base_url, api_key=token),
+            model_name,
+            provider=OpenAIProvider(
+                base_url=settings.hetzner_base_url, api_key=token, http_client=http_client
+            ),
+            profile=hetzner_profile(model_name),
             settings=OpenAIChatModelSettings(
                 temperature=0.0,
                 max_tokens=24000,  # bilingual descriptions/specs for a 20-item batch
@@ -169,7 +203,10 @@ def _excerpt(text: str, limit: int) -> str:
 
 
 class RateLimiter:
-    """Simple pacer: at most `n` calls per `window_s` seconds (evenly spaced)."""
+    """Simple pacer: at most `n` calls per `window_s` seconds (evenly spaced).
+
+    Safe for concurrent callers: each caller reserves its slot *before* sleeping, so two
+    coroutines waking up together can never share one slot."""
 
     def __init__(self, n: int, window_s: float) -> None:
         self.interval = window_s / max(n, 1)
@@ -177,9 +214,14 @@ class RateLimiter:
 
     async def wait(self) -> None:
         now = time.monotonic()
-        if now < self._next:
-            await asyncio.sleep(self._next - now)
-        self._next = max(now, self._next) + self.interval
+        slot = max(now, self._next)
+        self._next = slot + self.interval
+        if slot > now:
+            await asyncio.sleep(slot - now)
+
+    def penalize(self, seconds: float) -> None:
+        """Push the next slot out (after an HTTP 429) without blocking in-flight work."""
+        self._next = max(self._next, time.monotonic() + seconds)
 
 
 @dataclass
@@ -191,6 +233,7 @@ class EnrichReport:
     merged: int = 0
     batches: int = 0
     failed_batches: int = 0
+    deferred: int = 0  # products not sent because the time budget ran out (next run picks them up)
     error: str | None = None
     merges: list[tuple[str, str]] = field(default_factory=list)
 
@@ -250,8 +293,15 @@ class Enricher:
         key_aliases: dict[str, str] | None = None,
         mirror_path: Path | None = None,
         descriptions: dict[str, str] | None = None,
+        concurrency: int | None = None,
+        time_budget_s: float | None = None,
     ):
         self.store = store
+        self.concurrency = max(1, concurrency or settings.ai_concurrency)
+        # 0 / None = unlimited. Measured in wall-clock seconds from the start of `enrich()`.
+        self.time_budget_s = (
+            settings.ai_time_budget_min * 60 if time_budget_s is None else time_budget_s
+        )
         self.descriptions = descriptions or {}  # product id -> best seller description
         self.key_aliases = key_aliases or {}  # product id -> cache key (e.g. via redirects)
         self.mirror_path = mirror_path  # checkpoint copy, refreshed after every batch
@@ -332,16 +382,22 @@ class Enricher:
             log.warning("enrichment disabled: %s", report.error)
             return report
 
-        n_batches = -(-len(pending) // batch_size)
+        batches = [pending[i : i + batch_size] for i in range(0, len(pending), batch_size)]
+        n_batches = len(batches)
         log.info(
-            "enrichment: %d products in %d batches (model %s)",
+            "enrichment: %d products in %d batches (model %s, %d concurrent, budget %s)",
             len(pending),
             n_batches,
             self.model_name,
+            self.concurrency,
+            f"{self.time_budget_s / 60:.0f} min" if self.time_budget_s else "none",
         )
-        for i in range(0, len(pending), batch_size):
-            batch = pending[i : i + batch_size]
-            inputs = [self._to_input(p) for p in batch]
+        started = time.monotonic()
+        deadline = started + self.time_budget_s if self.time_budget_s else None
+        public_profile = self.store.profile.public()
+
+        async def run_batch(index: int) -> tuple[int, EnrichmentBatch | BaseException]:
+            inputs = [self._to_input(p) for p in batches[index]]
             prompt = "\n".join(x.model_dump_json(exclude_none=True) for x in inputs)
             await self.limiter.wait()
             try:
@@ -349,35 +405,69 @@ class Enricher:
                     prompt,
                     model=model,
                     deps=BatchDeps(
-                        expected_keys=frozenset(x.key for x in inputs),
-                        profile=self.store.profile.public(),
+                        expected_keys=frozenset(x.key for x in inputs), profile=public_profile
                     ),
                 )
             except Exception as exc:  # noqa: BLE001 - enrichment is best-effort
-                report.failed_batches += 1
-                report.error = f"{type(exc).__name__}: {exc}"
-                log.error("enrichment batch %d failed: %s", i // batch_size, report.error)
-                if report.failed_batches >= 3 and report.enriched == 0:
-                    break  # credentials / network – stop burning time
-                if "429" in str(exc):
-                    await asyncio.sleep(60)
-                continue
-            report.batches += 1
-            if report.batches % 5 == 0 or report.batches == n_batches:
-                log.info(
-                    "enrichment: batch %d/%d done, enriched=%d merged=%d",
-                    report.batches,
-                    n_batches,
-                    report.enriched + len(result.output.items),
-                    report.merged,
-                )
-            for e in result.output.items:
-                if (p := catalog.products.get(e.key)) is None:
+                return index, exc
+            return index, result.output
+
+        # Bounded window of in-flight requests. Results are applied here, sequentially, because
+        # `_apply` mutates the shared catalog (renames / merges) and the cache file.
+        next_index = 0
+        in_flight: set[asyncio.Task[tuple[int, EnrichmentBatch | BaseException]]] = set()
+        stop = False
+        while True:
+            while not stop and next_index < n_batches and len(in_flight) < self.concurrency:
+                if deadline is not None and time.monotonic() >= deadline:
+                    stop = True
+                    report.deferred = sum(len(b) for b in batches[next_index:])
+                    log.warning(
+                        "enrichment: time budget of %.0f min reached after %d/%d batches – "
+                        "%d products deferred to the next run",
+                        self.time_budget_s / 60,
+                        next_index,
+                        n_batches,
+                        report.deferred,
+                    )
+                    break
+                in_flight.add(asyncio.create_task(run_batch(next_index)))
+                next_index += 1
+            if not in_flight:
+                break
+            done, in_flight = await asyncio.wait(in_flight, return_when=asyncio.FIRST_COMPLETED)
+            for task in sorted(done, key=lambda t: t.result()[0]):
+                index, outcome = task.result()
+                if isinstance(outcome, BaseException):
+                    report.failed_batches += 1
+                    report.error = f"{type(outcome).__name__}: {outcome}"
+                    log.error("enrichment batch %d failed: %s", index, report.error)
+                    if report.failed_batches >= 3 and report.enriched == 0:
+                        stop = True  # credentials / endpoint contract – stop burning time
+                    if "429" in str(outcome):
+                        self.limiter.penalize(60)
                     continue
-                if self._apply(catalog, p, e, report):
-                    self.cache[p.id] = e
-                    report.enriched += 1
-            self.save()
+                report.batches += 1
+                for e in outcome.items:
+                    if (p := catalog.products.get(e.key)) is None:
+                        continue
+                    if self._apply(catalog, p, e, report):
+                        self.cache[p.id] = e
+                        report.enriched += 1
+                self.save()
+                if report.batches % 5 == 0 or report.batches + report.failed_batches == n_batches:
+                    elapsed = time.monotonic() - started
+                    log.info(
+                        "enrichment: batch %d/%d done, enriched=%d merged=%d (%.1f min, %.0f items/min)",
+                        report.batches,
+                        n_batches,
+                        report.enriched,
+                        report.merged,
+                        elapsed / 60,
+                        report.enriched / max(elapsed / 60, 1e-6),
+                    )
+        # `stop` only prevents new launches – already running batches are still awaited and
+        # applied above, so a run that hits the budget keeps every answer it paid for.
         return report
 
     def _apply(self, catalog: Catalog, p: Product, e: Enrichment, report: EnrichReport) -> bool:
@@ -387,18 +477,23 @@ class Enricher:
         source_names = [p.canonical_name, *p.raw_names]
         other_id = catalog.aliases.get(_names.clean(proposed_name))
         other = catalog.products.get(other_id or "")
-        conflict = _identities_conflict(source_names, [proposed_name])
+        # Keeping the current canonical name cannot change identity: a cached answer whose
+        # name already won (or the model confirming our name) must not be rejected just
+        # because a seller spelling in `raw_names` mentions e.g. "relay", "PCB" or "1GB".
+        renames = _names.clean(proposed_name) != _names.clean(p.canonical_name)
+        conflict = renames and _identities_conflict(source_names, [proposed_name])
         source_variants, proposed_variants = (
             _explicit_variants(source_names),
             _explicit_variants([proposed_name]),
         )
-        if any(
+        if renames and any(
             key in source_variants and key not in proposed_variants
             for key in ("memory", "arduino-revision")
         ):
             conflict = True
         if (
-            source_variants.get("esp32-chipset", set()) - {"esp32"}
+            renames
+            and source_variants.get("esp32-chipset", set()) - {"esp32"}
             and "esp32-chipset" not in proposed_variants
         ):
             conflict = True

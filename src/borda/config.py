@@ -35,10 +35,18 @@ class Settings(BaseSettings):
     # Inference API; any `provider:model` string Pydantic AI understands also works.
     ai_model: str = "hetzner:Qwen/Qwen3.6-35B-A3B-FP8"
     ai_enabled: bool = True
-    ai_batch_size: int = 20  # ~5k output tokens with descriptions+specs; fits max_tokens
-    ai_max_items_per_run: int = 5000  # ~31 min at 8 req/min x 20 items
+    ai_batch_size: int = 20  # ~8-12k bilingual output tokens; fits max_tokens=24000
+    ai_max_items_per_run: int = 5000  # hard cap; the time budget below is the real limit
     ai_desc_chars: int = 500  # seller-description excerpt passed to the model per product
-    ai_requests_per_minute: int = 8  # Hetzner limit is 10/min – keep headroom for retries
+    # Hetzner Inference limits per key (docs.hetzner.com, experiments/inference): 10 requests,
+    # 4M input and 100k output tokens per 60 s -> HTTP 429 beyond that. Keep request headroom
+    # for validator retries. Generation (~1 min per 20-item bilingual batch) is the real
+    # bottleneck, so a few batches run concurrently; sequential runs managed ~25 items/min.
+    ai_requests_per_minute: int = 8
+    ai_concurrency: int = 3  # in-flight batches (3 x ~12k output tokens/min stays < 100k)
+    # Stop *launching* batches after this many minutes so the GitHub job (170 min) always
+    # reaches the persist/commit steps; unsent products are enriched by the next run. 0 = off.
+    ai_time_budget_min: float = 100.0
     hetzner_base_url: str = "https://inference.hetzner.com/api/v1"
     hetzner_token: str | None = Field(
         default=None,

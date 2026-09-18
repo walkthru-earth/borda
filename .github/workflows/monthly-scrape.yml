@@ -39,11 +39,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 170
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
-      - uses: astral-sh/setup-uv@v7
+      # setup-uv stopped publishing floating major tags in v8 – pin the full version.
+      - uses: astral-sh/setup-uv@v10.1.0
         with:
           enable-cache: true # caches ~/.cache/uv keyed on uv.lock
           python-version: "3.12"
@@ -62,7 +63,7 @@ jobs:
       # Saved with `if: always()` below so a failed / timed-out attempt still keeps its progress.
       - name: Restore checkpoints, page cache, embedding model
         id: cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: .cache
           key: scrape-cache-${{ github.run_id }}-${{ github.run_attempt }}
@@ -106,7 +107,7 @@ jobs:
 
       - name: Save checkpoints, page cache, embedding model
         if: always()
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: .cache
           key: scrape-cache-${{ github.run_id }}-${{ github.run_attempt }}
@@ -133,7 +134,13 @@ jobs:
           if d.get("embeddings"):
               e = d["embeddings"]; print(f"\n**embeddings** computed={e['computed']} reused={e['reused']} neighbours={e['neighbours']}")
           if d.get("enrichment"):
-              e = d["enrichment"]; print(f"\n**enrichment** enriched={e['enriched']} cached={e['cached']} merged={e['merged']} failed_batches={e['failed_batches']}")
+              e = d["enrichment"]
+              print(f"\n**enrichment** requested={e['requested']} enriched={e['enriched']} cached={e['cached']} stale={e.get('stale', 0)} "
+                    f"merged={e['merged']} batches={e['batches']} failed_batches={e['failed_batches']} deferred={e.get('deferred', 0)}")
+              if e.get("deferred"):
+                  print(f"\n> ⏳ time budget reached – {e['deferred']} products will be enriched by the next run")
+              if e.get("error"):
+                  print(f"\n> ❌ last enrichment error: {e['error'][:300]}")
           for err in d.get("errors", []):
               print(f"\n> ⚠️ {err}")
           PY
@@ -141,7 +148,7 @@ jobs:
 
       - name: Upload logs & diagnostics
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: diagnostics-${{ github.run_id }}
           path: diagnostics/
@@ -162,7 +169,7 @@ jobs:
           git pull --rebase --autostash origin "${GITHUB_REF_NAME}"
           git push origin HEAD:"${GITHUB_REF_NAME}"
 
-      - name: Fail the job if a store broke
+      - name: Fail the job if a store broke or enrichment produced nothing
         if: success()
         run: |
           python3 - <<'PY'
@@ -170,7 +177,13 @@ jobs:
           d = json.load(open("diagnostics/latest.json"))
           failed = [s["seller"] for s in d["stores"] if s["status"] == "failed"]
           print("failed stores:", failed or "none")
+          e = d.get("enrichment") or {}
+          # The run is best-effort per batch, but a whole run with an error and zero enriched
+          # products means the model/endpoint contract broke (e.g. HTTP 400 on every batch in
+          # Sept 2026) – that must not stay green month after month.
+          enrichment_dead = bool(e) and e.get("requested", 0) > 0 and e.get("enriched", 0) == 0 and e.get("error")
+          print("enrichment:", "BROKEN – " + str(e.get("error"))[:200] if enrichment_dead else "ok")
           # Data is already committed; a non-zero exit here only turns the run red so
-          # someone looks at the store. Remove `sys.exit` for a quieter setup.
-          sys.exit(1 if failed else 0)
+          # someone looks at it. Remove `sys.exit` for a quieter setup.
+          sys.exit(1 if failed or enrichment_dead else 0)
           PY
