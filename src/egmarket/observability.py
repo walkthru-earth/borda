@@ -32,10 +32,21 @@ def setup_logging(verbose: bool = False) -> None:
         if not IN_ACTIONS
         else "%(levelname)-7s %(name)s: %(message)s",  # Actions adds its own timestamps
         datefmt="%H:%M:%S",
-        stream=sys.stderr,
+        # In Actions everything goes through ONE stream so ::group:: commands and log lines
+        # keep their order (the runner reads stdout and stderr as separate pipes).
+        stream=sys.stdout if IN_ACTIONS else sys.stderr,
         force=True,
     )
-    for noisy in ("httpx", "httpcore", "openai", "huggingface_hub", "onnxruntime", "urllib3"):
+    for noisy in (
+        "httpx",
+        "httpx2",
+        "httpcore",
+        "openai",
+        "huggingface_hub",
+        "onnxruntime",
+        "urllib3",
+        "filelock",
+    ):
         logging.getLogger(noisy).setLevel(logging.WARNING)
     if IN_ACTIONS:
         logging.getLogger().addHandler(AnnotationHandler())

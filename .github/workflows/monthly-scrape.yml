@@ -91,8 +91,8 @@ jobs:
           [ -n "${{ inputs.stores }}" ] && args+=(--stores ${{ inputs.stores }})
           [ -n "${{ inputs.max_pages }}" ] && args+=(--max-pages "${{ inputs.max_pages }}")
           [ "${{ inputs.fresh }}" = "true" ] && args+=(--fresh)
-          # stderr (structured log + ::annotations::) goes to the job log AND run.log
-          uv run egmarket run "${args[@]}" 2> >(tee diagnostics/run.log >&2) | tee diagnostics/run-summary.json
+          # one stream: phase groups, progress and ::annotations:: in order; copy kept as run.log
+          uv run egmarket run "${args[@]}" --out diagnostics/run-summary.json 2>&1 | tee diagnostics/run.log
           echo "run_id=$(python3 -c 'import json;print(json.load(open("diagnostics/run-summary.json"))["run_id"])')" >> "$GITHUB_OUTPUT"
 
       - name: Save checkpoints, page cache, embedding model

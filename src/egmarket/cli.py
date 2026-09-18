@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import json
 import sys
+from pathlib import Path
 
 import pyarrow.compute as pc
 
@@ -32,6 +33,7 @@ def _p() -> argparse.ArgumentParser:
     r.add_argument(
         "--fresh", action="store_true", help="ignore checkpoints from an earlier attempt this month"
     )
+    r.add_argument("--out", type=Path, help="write the run diagnostics JSON here instead of stdout")
 
     sub.add_parser("stores", help="list registered stores")
 
@@ -76,7 +78,12 @@ def main(argv: list[str] | None = None) -> int:
                 )
             )
         )
-        print(diag.model_dump_json(indent=1, exclude={"stores": {"__all__": {"warnings"}}}))
+        summary = diag.model_dump_json(indent=1, exclude={"stores": {"__all__": {"warnings"}}})
+        if args.out:
+            args.out.parent.mkdir(parents=True, exist_ok=True)
+            args.out.write_text(summary + "\n")
+        else:
+            print(summary)
         return code
 
     if args.cmd == "stores":
