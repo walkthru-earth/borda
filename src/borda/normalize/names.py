@@ -12,8 +12,10 @@ import re
 import unicodedata
 from functools import lru_cache
 
+from ..config import settings
+
 _NOISE = re.compile(
-    r"\b(original|genuine|high quality|hot sale|brand new|new|egypt|in stock|"
+    r"\b(original|genuine|high quality|hot sale|brand new|new|in stock|"
     r"copy|1pcs?|\d+\s*pcs?|piece|pieces|free shipping)\b",
     re.I,
 )
@@ -43,7 +45,7 @@ _ALIASES: dict[str, str] = {
     "dht 22": "dht22",
     "ssd 1306": "ssd1306",
 }
-# Egyptian-market Arabic terms -> English tokens, applied before matching so a listing
+# Arabic electronics terms -> English tokens, applied before matching so a listing
 # written in Arabic lands on the same official product (the Arabic name itself is kept
 # in Product.raw_names for search).
 _ARABIC_GLOSSARY: dict[str, str] = {
@@ -155,9 +157,14 @@ def _strip_accents(s: str) -> str:
     return "".join(c for c in unicodedata.normalize("NFKD", s) if not unicodedata.combining(c))
 
 
-@lru_cache(maxsize=65536)
 def clean(raw: str) -> str:
+    return _clean(raw, settings.country_profile.country_name)
+
+
+@lru_cache(maxsize=65536)
+def _clean(raw: str, country_name: str) -> str:
     s = _strip_accents(raw).lower()
+    s = re.sub(r"\b" + re.escape(_strip_accents(country_name).lower()) + r"\b", " ", s)
     s = s.replace("×", "x").replace("–", "-").replace("—", "-")
     s = re.sub(r"\(.*?copy.*?\)", " ", s)
     s = _NOISE.sub(" ", s)
@@ -184,20 +191,28 @@ def tokens(cleaned: str) -> list[str]:
     return [t for t in _SPLIT.split(cleaned) if t]
 
 
-@lru_cache(maxsize=65536)
 def match_key(raw: str) -> str:
-    toks = [t for t in tokens(clean(raw)) if t not in _STOP and len(t) > 1]
+    return _match_key(clean(raw))
+
+
+@lru_cache(maxsize=65536)
+def _match_key(cleaned: str) -> str:
+    toks = [t for t in tokens(cleaned) if t not in _STOP and len(t) > 1]
     return " ".join(sorted(set(toks)))
 
 
 _NUM_TOKEN = re.compile(r"^\d+(?:\.\d+)?[a-z]*$|^[a-z]+\d+[a-z0-9-]*$")
 
 
-@lru_cache(maxsize=65536)
 def numeric_signature(raw: str) -> frozenset[str]:
     """Tokens that carry a value/part-number – e.g. {'10k','esp32','atmega328p','16x2'}."""
+    return _numeric_signature(clean(raw))
+
+
+@lru_cache(maxsize=65536)
+def _numeric_signature(cleaned: str) -> frozenset[str]:
     out = set()
-    for t in tokens(clean(raw)):
+    for t in tokens(cleaned):
         if _NUM_TOKEN.match(t) or re.search(r"\d+x\d+", t):
             out.add(t)
     return frozenset(out)

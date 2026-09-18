@@ -1,6 +1,7 @@
 """Resumable run state, so a failed / timed-out job does not start from zero.
 
-`.cache/checkpoints/<key>/` (key = the run month by default):
+`<cache-parent>/checkpoints/<profile-id>/<profile-fingerprint>/<key>/`
+(key = the run month by default):
   store-<slug>.jsonl      raw offers of a store that finished with status OK
   store-<slug>.report.json  its StoreReport
   enrichment.parquet      mirror of the LLM cache, refreshed after every batch
@@ -15,13 +16,15 @@ import shutil
 from pathlib import Path
 
 from .models import RawOffer, ScrapeStatus, StoreReport
+from .profiles import CountryProfile, default_profile
 
 log = logging.getLogger(__name__)
 
 
 class Checkpoint:
-    def __init__(self, root: Path, key: str) -> None:
-        self.dir = root / key
+    def __init__(self, root: Path, key: str, *, profile: CountryProfile | None = None) -> None:
+        profile = profile or default_profile()
+        self.dir = root / profile.id / profile.fingerprint / key
         self.key = key
 
     # ------------------------------------------------------------------ stores

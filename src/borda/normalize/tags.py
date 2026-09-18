@@ -119,15 +119,15 @@ _BAD_TAG = re.compile(r"^\d+$|^.{0,1}$|^.{31,}$")
 # store-side marketing/navigation tags that say nothing about the product
 _STORE_NOISE = re.compile(
     r"latest|new-?arrival|best-?sell|featured|offer|sale|discount|deal|hot|top|trending|"
-    r"recommend|home|all-products|uncategori[sz]ed|electronics$|egypt|shop|store"
+    r"recommend|home|all-products|uncategori[sz]ed|electronics$|shop|store"
 )
 
 
 def _seller_words() -> set[str]:
-    from ..scrapers.stores import STORES
+    from ..config import settings
 
     words: set[str] = set()
-    for st in STORES:
+    for st in settings.country_profile.stores:
         words.add(st.slug)
         words.update(_norm(w) for w in st.name.split())
         words.add(_norm(st.name))

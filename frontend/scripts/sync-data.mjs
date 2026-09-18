@@ -1,14 +1,19 @@
-// Copy the pipeline's Parquet output into static/data so `vite build` ships it.
-// (In dev a symlink is enough: ln -s ../../data static/data)
-import { cpSync, existsSync, rmSync, lstatSync } from 'node:fs';
-import { resolve } from 'node:path';
+// Publish one snapshot's manifest and derived tables; nested market/history folders are not bundled.
+import { cpSync, existsSync, rmSync, lstatSync, mkdirSync, readdirSync } from 'node:fs';
+import { resolve, join } from 'node:path';
 
-const src = resolve(process.argv[2] ?? '../data');
+const src = resolve(process.argv[2] ?? process.env.BORDA_DATA_DIR ?? '../data');
 const dst = resolve('static/data');
-if (!existsSync(src)) {
-	console.error(`no data dir at ${src} – run \`uv run egmarket run\` first`);
-	process.exit(1);
+if (src === dst || src.startsWith(`${dst}/`)) {
+ console.error('The source snapshot must be outside static/data.');
+ process.exit(1);
 }
+if (!existsSync(join(src, 'manifest.json')) || !existsSync(join(src, 'catalog.parquet'))) {
+ console.error(`No catalog snapshot at ${src} – run \`uv run borda run\` first or set BORDA_DATA_DIR.`);
+ process.exit(1);
+}
+const snapshotFiles = readdirSync(src, { withFileTypes: true }).filter(entry => entry.isFile() && (entry.name === 'manifest.json' || entry.name.endsWith('.parquet')));
 if (existsSync(dst) || (() => { try { return lstatSync(dst).isSymbolicLink(); } catch { return false; } })()) rmSync(dst, { recursive: true, force: true });
-cpSync(src, dst, { recursive: true, dereference: true });
-console.log(`synced ${src} -> ${dst}`);
+mkdirSync(dst, { recursive: true });
+for (const file of snapshotFiles) cpSync(join(src, file.name), join(dst, file.name));
+console.log(`Synced Borda snapshot ${src} -> ${dst} (${snapshotFiles.length} files)`);

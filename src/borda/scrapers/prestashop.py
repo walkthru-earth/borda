@@ -18,7 +18,7 @@ class PrestaShopScraper(BaseScraper):
 
     async def iter_offers(self) -> AsyncIterator[RawOffer]:
         listing = self.store.params.get("listing", "2-home")
-        currency = self.store.params.get("currency", "EGP")
+        currency = self.store.params.get("currency", self.currency)
         page, pages_count = 1, 1
         while page <= min(pages_count, self.max_pages):
             data = await self.fetch.json(

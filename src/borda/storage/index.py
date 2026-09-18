@@ -4,7 +4,7 @@ structure client-side from catalog.parquet – see frontend/src/lib/search.ts).
   {"ids": ["esp32-devkit", ...],
    "docs": [["ESP32 DevKit V1", ["esp32","wifi"], 3], ...],   # name, tags, seller count
    "tokens": {"esp32": [0, 17, 42], ...}}                    # token -> doc positions
-Tokens come from canonical names, *all* raw (Egyptian-market) names and tags, so a query
+Tokens come from canonical names, *all* raw local-market names and tags, so a query
 using a local spelling still finds the official product."""
 
 from __future__ import annotations

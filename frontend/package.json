@@ -1,11 +1,11 @@
 {
-  "name": "egmarket-frontend",
+  "name": "borda-frontend",
   "private": true,
   "version": "0.1.0",
   "type": "module",
   "scripts": {
     "dev": "vite dev",
-    "build": "node scripts/sync-data.mjs ../data && vite build && node scripts/generate-seo.mjs",
+    "build": "node scripts/sync-data.mjs && vite build && node scripts/generate-seo.mjs",
     "preview": "vite preview",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "sync-data": "node scripts/sync-data.mjs",

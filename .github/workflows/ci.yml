@@ -24,6 +24,7 @@ jobs:
           enable-cache: true
           python-version: "3.12"
       - run: uv sync --all-groups
+      - run: uv run borda --help
       - run: uv run ruff check src tests
       - run: uv run ruff format --check src tests
       - run: uv run pytest -q

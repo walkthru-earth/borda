@@ -1,10 +1,10 @@
 [project]
-name = "egmarket"
+name = "borda"
 version = "0.1.0"
-description = "Monthly scraper + price-history tracker for the Egyptian microcontroller & hardware market"
+description = "Electronic component search and price-history tracking across configurable country catalogs, starting with Egypt"
 readme = "README.md"
 requires-python = ">=3.12"
-license = { text = "MIT" }
+license = "CC-BY-4.0"
 dependencies = [
     "pydantic>=2.13",
     "pydantic-settings>=2.10",
@@ -20,7 +20,7 @@ dependencies = [
 ]
 
 [project.scripts]
-egmarket = "egmarket.cli:main"
+borda = "borda.cli:main"
 
 [dependency-groups]
 dev = ["pytest>=9.1", "pytest-asyncio>=1.3", "respx>=0.22", "ruff>=0.16"]
@@ -30,7 +30,7 @@ requires = ["uv_build>=0.9,<0.13"]
 build-backend = "uv_build"
 
 [tool.uv.build-backend]
-module-name = "egmarket"
+module-name = "borda"
 module-root = "src"
 
 [tool.ruff]
@@ -44,4 +44,4 @@ ignore = ["E501"]  # formatter owns line length; the canonical-rules table is in
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-filterwarnings = ["error::DeprecationWarning:egmarket"]
+filterwarnings = ["error::DeprecationWarning:borda"]

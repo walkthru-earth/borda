@@ -34,8 +34,10 @@ import pyarrow.dataset as ds
 import pyarrow.parquet as pq
 
 from .. import SCHEMA_VERSION
+from ..config import settings
 from ..models import Enrichment, OfferRecord, Product, Run, StoreReport
 from ..normalize import Catalog
+from ..profiles import CountryProfile, assert_profile_directory, claim_profile_directory
 
 PARQUET_FORMAT = "2.6"  # latest Parquet format spec version pyarrow can emit
 WRITE_KW: dict[str, Any] = {
@@ -227,7 +229,9 @@ def partition_dir(root: Path, ts: datetime) -> Path:
 
 
 class ParquetStore:
-    def __init__(self, data_dir: Path) -> None:
+    def __init__(self, data_dir: Path, *, profile: CountryProfile | None = None) -> None:
+        self.profile = profile or settings.country_profile
+        assert_profile_directory(data_dir, self.profile)
         self.data_dir = data_dir
         self.offers_dir = data_dir / "offers"
         self.store_runs_dir = data_dir / "store_runs"
@@ -242,6 +246,7 @@ class ParquetStore:
         self.written: dict[str, dict[str, Any]] = {}  # relative path -> file_info (manifest)
 
     def _write(self, path: Path, table: pa.Table, **layout: Any) -> str:
+        claim_profile_directory(self.data_dir, self.profile)
         sha = write_table(path, table, **layout)
         self.written[str(path.relative_to(self.data_dir))] = file_info(path, sha)
         return sha

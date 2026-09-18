@@ -11,6 +11,7 @@ from decimal import Decimal
 from statistics import median
 
 from ..models import OfferRecord
+from ..profiles import CountryProfile, default_profile
 
 
 def flag_offers(
@@ -18,14 +19,16 @@ def flag_offers(
     *,
     reference_prices: dict[str, list[float]] | None = None,
     factor: float = 8.0,
+    profile: CountryProfile | None = None,
 ) -> dict[str, int]:
     """Mutates `offers[*].flags`; returns a counter of flag -> occurrences.
 
     `reference_prices` maps product id -> recent historic prices (helps when a product
     has a single seller this run)."""
+    profile = profile or default_profile()
     by_product: dict[str, list[Decimal]] = defaultdict(list)
     for o in offers:
-        if o.price is not None and o.currency == "EGP":
+        if o.price is not None and o.currency == profile.currency:
             by_product[o.product_id].append(o.price)
     if reference_prices:
         for pid, hist in reference_prices.items():
@@ -36,9 +39,9 @@ def flag_offers(
         flags: list[str] = []
         if o.price is None:
             flags.append("missing_price")
-        elif o.price < Decimal("0.05"):
+        elif o.currency == profile.currency and o.price < profile.minimum_price:
             flags.append("implausible_price")
-        elif o.currency == "EGP":
+        elif o.currency == profile.currency:
             prices = by_product[o.product_id]
             if len(prices) >= 3:
                 med = median(prices)
@@ -46,7 +49,7 @@ def flag_offers(
                     flags.append("outlier_high")
                 elif med > 0 and o.price * Decimal(factor) < med:
                     flags.append("outlier_low")
-        if o.currency != "EGP":
+        if o.currency != profile.currency:
             flags.append("foreign_currency")
         o.flags = flags
         for f in flags:

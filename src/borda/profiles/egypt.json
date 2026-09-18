@@ -1,0 +1,123 @@
+{
+  "id": "egypt",
+  "country_code": "EG",
+  "country_name": "Egypt",
+  "country_name_ar": "مصر",
+  "currency": "EGP",
+  "locale": "en-EG",
+  "locale_ar": "ar-EG",
+  "timezone": "Africa/Cairo",
+  "languages": [
+    "en",
+    "ar"
+  ],
+  "stores": [
+    {
+      "slug": "fut-electronics",
+      "name": "Future Electronics (FUT)",
+      "base_url": "https://store.fut-electronics.com",
+      "platform": "shopify"
+    },
+    {
+      "slug": "devboardsmarket",
+      "name": "DevBoards Market",
+      "base_url": "https://devboardsmarket.com",
+      "platform": "shopify"
+    },
+    {
+      "slug": "circuits-elec",
+      "name": "Circuits Electronics",
+      "base_url": "https://circuits-elec.com",
+      "platform": "shopify",
+      "params": {
+        "delay_s": 2.0
+      },
+      "note": "Shopify rate-limits products.json aggressively (429 after ~4 pages at 0.6s)."
+    },
+    {
+      "slug": "uge-one",
+      "name": "UGE Electronics",
+      "base_url": "https://uge-one.com",
+      "platform": "woocommerce",
+      "note": "HTML front is behind Cloudflare, but the WooCommerce Store API is open."
+    },
+    {
+      "slug": "microohm",
+      "name": "Micro Ohm Electronics",
+      "base_url": "https://microohm-eg.com",
+      "platform": "woocommerce",
+      "note": "403 from GitHub-hosted runner IPs (works from Egypt/residential); set BORDA_PROXY_URL."
+    },
+    {
+      "slug": "makerselectronics",
+      "name": "Makers Electronics",
+      "base_url": "https://makerselectronics.com",
+      "platform": "woocommerce"
+    },
+    {
+      "slug": "mostelectronic",
+      "name": "Most Electronic",
+      "base_url": "https://mostelectronic.com",
+      "platform": "woocommerce"
+    },
+    {
+      "slug": "fares-pcb",
+      "name": "Fares PCB",
+      "base_url": "https://fares-pcb.com",
+      "platform": "woocommerce"
+    },
+    {
+      "slug": "ic-hat",
+      "name": "IC Hat",
+      "base_url": "https://ic-hat.com/en",
+      "platform": "prestashop",
+      "params": {
+        "listing": "2-home"
+      },
+      "note": "403 from GitHub-hosted runner IPs (works from Egypt/residential); set BORDA_PROXY_URL."
+    },
+    {
+      "slug": "ram-e-shop",
+      "name": "RAM Electronics",
+      "base_url": "https://www.ram-e-shop.com",
+      "platform": "odoo"
+    },
+    {
+      "slug": "easytest",
+      "name": "EasyTest",
+      "base_url": "https://www.easytest.com.eg/en",
+      "platform": "easytest"
+    },
+    {
+      "slug": "maamoon",
+      "name": "Maamoon Est.",
+      "base_url": "https://www.maamoon.com",
+      "platform": "wix",
+      "note": "Storefront GraphQL (anonymous instance token); sitemap+JSON-LD fallback."
+    },
+    {
+      "slug": "eshopmas",
+      "name": "eShop MAS",
+      "base_url": "https://eshopmas.com",
+      "platform": "woocommerce",
+      "enabled": false,
+      "note": "Cloudflare challenge blocks both HTML and the Store API from CI runners."
+    },
+    {
+      "slug": "rsdelivers",
+      "name": "RS Components Egypt",
+      "base_url": "https://eg.rsdelivers.com",
+      "platform": "unsupported",
+      "enabled": false,
+      "note": "Prices are rendered client-side (JSON-LD reports 0); catalog is >100k SKUs."
+    },
+    {
+      "slug": "amazon-eg",
+      "name": "Amazon Egypt",
+      "base_url": "https://www.amazon.eg",
+      "platform": "unsupported",
+      "enabled": false,
+      "note": "Optional per brief; requires anti-bot handling – out of scope for now."
+    }
+  ]
+}

@@ -7,9 +7,9 @@ import httpx
 import pyarrow.parquet as pq
 import respx
 
-from egmarket.pipeline import RunOptions, run_pipeline
-from egmarket.scrapers import Store
-from egmarket.storage import ParquetStore
+from borda.pipeline import RunOptions, run_pipeline
+from borda.scrapers import Store
+from borda.storage import ParquetStore
 
 SHOP = Store(slug="shop-a", name="A", base_url="https://a.test", platform="shopify")
 WOO = Store(slug="shop-b", name="B", base_url="https://b.test", platform="woocommerce")
@@ -64,7 +64,7 @@ def _mock_stores(uno_price_b: str):
 
 @respx.mock
 async def test_two_runs_build_history_and_exports(tmp_path, monkeypatch):
-    monkeypatch.setattr("egmarket.http.settings.max_retries", 0)
+    monkeypatch.setattr("borda.http.settings.max_retries", 0)
     data, diag_dir = tmp_path / "data", tmp_path / "diag"
     opts = RunOptions(
         stores=[SHOP.slug, WOO.slug, DEAD.slug],
@@ -148,7 +148,7 @@ async def test_two_runs_build_history_and_exports(tmp_path, monkeypatch):
 
 @respx.mock
 async def test_all_stores_failing_exits_nonzero_and_writes_nothing(tmp_path, monkeypatch):
-    monkeypatch.setattr("egmarket.http.settings.max_retries", 0)
+    monkeypatch.setattr("borda.http.settings.max_retries", 0)
     respx.get(url__regex=r".*").mock(return_value=httpx.Response(503))
     diag, code = await run_pipeline(
         RunOptions(
@@ -166,11 +166,11 @@ async def test_all_stores_failing_exits_nonzero_and_writes_nothing(tmp_path, mon
 
 @respx.mock
 async def test_reindex_replays_history_and_keeps_enrichment(tmp_path, monkeypatch):
-    from egmarket.enrich import ai as ai_mod
-    from egmarket.models import Enrichment
-    from egmarket.pipeline import reindex
+    from borda.enrich import ai as ai_mod
+    from borda.models import Enrichment
+    from borda.pipeline import reindex
 
-    monkeypatch.setattr("egmarket.http.settings.max_retries", 0)
+    monkeypatch.setattr("borda.http.settings.max_retries", 0)
     data = tmp_path / "data"
     _mock_stores("38000")
     opts = RunOptions(
@@ -225,7 +225,7 @@ async def test_reindex_replays_history_and_keeps_enrichment(tmp_path, monkeypatc
 
 @respx.mock
 async def test_checkpoint_resumes_completed_stores(tmp_path, monkeypatch):
-    monkeypatch.setattr("egmarket.http.settings.max_retries", 0)
+    monkeypatch.setattr("borda.http.settings.max_retries", 0)
     cache = tmp_path / "cache" / "http"
     common = dict(
         stores=[SHOP.slug, WOO.slug],
@@ -258,14 +258,18 @@ async def test_checkpoint_resumes_completed_stores(tmp_path, monkeypatch):
     respx.get(url__regex=r"https://b\.test/.*").mock(return_value=httpx.Response(503))
     diag1, code = await run_pipeline(RunOptions(**common))
     assert code == 0 and diag1.resumed_stores == []
-    from egmarket.checkpoint import Checkpoint
+    from borda.checkpoint import Checkpoint
+    from borda.profiles import default_profile
 
-    ckpt = Checkpoint(tmp_path / "cache" / "checkpoints", "test")
+    profile = default_profile().model_copy(
+        update={"stores": [*default_profile().stores, SHOP, WOO]}
+    )
+    ckpt = Checkpoint(tmp_path / "cache" / "checkpoints", "test", profile=profile)
     assert not ckpt.dir.exists()  # successful run clears its checkpoint
-    ckpt = Checkpoint(tmp_path / "cache2" / "checkpoints", "test")
+    ckpt = Checkpoint(tmp_path / "cache2" / "checkpoints", "test", profile=profile)
 
     # simulate a crash after shop-a finished: re-create the checkpoint, then re-run
-    from egmarket.models import RawOffer, ScrapeStatus, StoreReport
+    from borda.models import RawOffer, ScrapeStatus, StoreReport
 
     offers = [
         RawOffer(
@@ -308,4 +312,4 @@ async def test_checkpoint_resumes_completed_stores(tmp_path, monkeypatch):
     assert diag2.resumed_stores == ["shop-a"]  # served from checkpoint, a.test never called
     assert a_route.call_count == 0
     assert {s.seller: s.status.value for s in diag2.stores} == {"shop-a": "ok", "shop-b": "ok"}
-    assert not (tmp_path / "cache2" / "checkpoints" / "test").exists()
+    assert not ckpt.dir.exists()

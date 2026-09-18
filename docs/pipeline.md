@@ -2,7 +2,72 @@
 
 [Project home](../README.md) · [Architecture](architecture.md) · [Development](development.md)
 
-## Stores
+## Country profiles
+
+The Python distribution, import package and command are all `borda`. Egypt is the built-in
+profile and remains the default. Its authoritative country metadata and store definitions
+live in `src/borda/profiles/egypt.json`.
+
+```bash
+uv run borda --profile egypt stores
+# Equivalent persistent setting: BORDA_PROFILE=egypt
+uv run borda --profile /absolute/path/to/uae.json stores
+```
+
+`--profile` is a global argument, placed **before** the command. `BORDA_PROFILE` accepts the
+same built-in name or JSON path. One profile selects one country/currency/store catalog; it
+is not a live cross-country selector or a foreign-exchange converter. Use a separate data
+snapshot and frontend deployment for each country.
+
+A custom profile starts with this shape. The illustrative store is disabled; replace it with
+an actual compatible storefront and enable it only when ready to scrape:
+
+```json
+{
+  "id": "uae",
+  "country_code": "AE",
+  "country_name": "United Arab Emirates",
+  "country_name_ar": "الإمارات العربية المتحدة",
+  "currency": "AED",
+  "locale": "en-AE",
+  "locale_ar": "ar-AE",
+  "timezone": "Asia/Dubai",
+  "languages": ["en", "ar"],
+  "minimum_price": 0.05,
+  "stores": [
+    {
+      "slug": "example-components",
+      "name": "Example Components",
+      "base_url": "https://example.com",
+      "platform": "woocommerce",
+      "enabled": false
+    }
+  ]
+}
+```
+
+Store definitions support `enabled`, `note`, `params` and an optional currency override.
+A profile configures existing adapters; it does not automatically support every storefront.
+Shopify and WooCommerce adapters target their public catalog interfaces, while store-specific
+adapters may require changes for another site. Add and test an adapter for unsupported formats.
+A store's currency must reflect its actual prices. Only observations in the profile currency
+enter comparisons; other currencies remain in raw history. Prices currently support two decimal
+places. A profile using a currency that needs three-decimal minor-unit precision (such as KWD
+or BHD) requires a monetary-schema and formatting change before its prices can be represented
+accurately.
+
+Egypt keeps the existing `data/`, `diagnostics/` and `.cache/http` paths. Other profile IDs
+use `data/<id>/`, `diagnostics/<id>/` and `.cache/<id>/http`, with isolated checkpoints.
+`BORDA_DATA_DIR` sets the exact data path. `BORDA_DIAGNOSTICS_DIR` and `BORDA_CACHE_DIR`
+override their base paths; non-Egypt pipeline runs append the profile ID to keep them isolated.
+Checkpoint directories also include the profile ID and configuration fingerprint, preventing
+resume data from a different country or changed store configuration from being reused.
+Existing manifest identity is checked before writing another profile into a data directory.
+The frontend reads exported country metadata from `manifest.profile`; legacy snapshots fall
+back to Egypt. [Frontend deployment](frontend.md#publishing-another-country-snapshot) explains
+how to publish a selected snapshot. UI translations currently cover English and Arabic only.
+
+## Stores (default Egypt profile)
 
 | slug | platform | method | status |
 |---|---|---|---|
@@ -22,10 +87,10 @@ wrap those. For third-party price tracking the anonymous surfaces above are the 
 available, and they are JSON where it matters (Shopify `/products.json`, WooCommerce Store API,
 PrestaShop XHR, Wix storefront GraphQL) – Odoo and EasyTest are the only HTML parsers left.
 
-Add a store: append a `Store(...)` in `src/egmarket/scrapers/stores.py`. Add a platform:
+Add a store to the selected profile JSON (`src/borda/profiles/egypt.json` for Egypt). Add a platform:
 subclass `BaseScraper` (yield `RawOffer`) and register it in `scrapers/__init__.py`.
 
-## Normalization & dedupe (`src/egmarket/normalize/`)
+## Normalization & dedupe (`src/borda/normalize/`)
 
 1. `clean()` – lowercase, strip marketing noise, unify units (`5 V`→`5v`, `10 K Ohm`→`10kohm`),
    alias table (`node mcu`→`nodemcu`), **Arabic glossary** (`اردوينو اونو`→`arduino uno`).
@@ -69,6 +134,6 @@ a `version`; bumping `ENRICHMENT_VERSION` refreshes older answers once (≤ item
 Default: Hetzner Inference (OpenAI-compatible) `hetzner:Qwen/Qwen3.6-35B-A3B-FP8`, tool-call
 structured output, thinking disabled (`chat_template_kwargs.enable_thinking=false`), paced to
 8 req/min, ≤5000 products/run, batch 20. Any Pydantic AI `provider:model` string works too
-(`EGMARKET_AI_MODEL=openai:gpt-5-mini`). Missing credentials → enrichment is skipped, run continues.
+(`BORDA_AI_MODEL=openai:gpt-5-mini`). Missing credentials → enrichment is skipped, run continues.
 
 See [Arabic content and optional AI discovery](frontend.md) for cached translations, embedding compatibility and browser behavior.

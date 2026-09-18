@@ -12,14 +12,16 @@ import pyarrow as pa
 
 from ..models import Availability
 from ..normalize import Catalog
+from ..profiles import CountryProfile, default_profile
 
 _EXCLUDE_FLAGS = {"outlier_high", "outlier_low", "implausible_price"}
 
 
 def build_series(
-    offers: pa.Table, catalog: Catalog
+    offers: pa.Table, catalog: Catalog, *, profile: CountryProfile | None = None
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Return (series_rows, stats_rows). Flagged outliers stay in history, not in charts."""
+    profile = profile or default_profile()
     if offers.num_rows == 0:
         return [], []
     cols = offers.select(
@@ -37,7 +39,7 @@ def build_series(
         if pid not in catalog.products:
             continue
         flags = cols["flags"][i] or []
-        if _EXCLUDE_FLAGS.intersection(flags) or cols["currency"][i] != "EGP":
+        if _EXCLUDE_FLAGS.intersection(flags) or cols["currency"][i] != profile.currency:
             continue
         points[pid].append(
             {
@@ -94,9 +96,10 @@ def build_series(
 
 
 def reference_prices(
-    offers: pa.Table, catalog: Catalog, last_runs: int = 3
+    offers: pa.Table, catalog: Catalog, last_runs: int = 3, *, profile: CountryProfile | None = None
 ) -> dict[str, list[float]]:
     """Recent unflagged prices per product – context for outlier detection."""
+    profile = profile or default_profile()
     if offers.num_rows == 0:
         return {}
     if last_runs <= 0:
@@ -111,7 +114,7 @@ def reference_prices(
             cols["run_id"][i] in keep
             and cols["price"][i] is not None
             and not cols["flags"][i]
-            and cols["currency"][i] == "EGP"
+            and cols["currency"][i] == profile.currency
         ):
             pid = catalog.resolve_listing(cols["product_id"][i], cols["seller"][i], cols["url"][i])
             if pid in catalog.products:

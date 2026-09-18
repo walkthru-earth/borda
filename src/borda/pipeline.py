@@ -10,7 +10,7 @@ import json
 import logging
 import time
 from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
@@ -37,7 +37,8 @@ from .models import (
 from .normalize import Catalog, flag_offers
 from .normalize.categories import assign_group
 from .observability import notice, phase
-from .scrapers import STORES, Store, build_scraper
+from .profiles import CountryProfile, load_profile, use_profile
+from .scrapers import Store, build_scraper
 from .storage import PARQUET_FORMAT, ParquetStore, build_series, reference_prices
 
 log = logging.getLogger(__name__)
@@ -45,6 +46,7 @@ log = logging.getLogger(__name__)
 
 @dataclass
 class RunOptions:
+    profile: str | CountryProfile | None = None
     stores: list[str] | None = None
     max_pages: int | None = None
     ai: bool = True
@@ -194,20 +196,50 @@ def dedupe_offers(offers: list[RawOffer], catalog: Catalog) -> tuple[list[OfferR
 
 
 async def run_pipeline(opts: RunOptions) -> tuple[Diagnostics, int]:
+    profile = load_profile(opts.profile) if opts.profile else settings.country_profile
+    with use_profile(profile):
+        return await _run_pipeline(replace(opts, profile=profile))
+
+
+async def _run_pipeline(opts: RunOptions) -> tuple[Diagnostics, int]:
     t0 = time.monotonic()
     ts = opts.ts or utcnow()
     run_id = opts.run_id or ts.strftime("%Y%m%dT%H%M%SZ")
-    data_dir = opts.data_dir or settings.data
-    diag_dir = opts.diagnostics_dir or settings.diagnostics
-    store = ParquetStore(data_dir)
+    profile = load_profile(opts.profile or settings.profile)
+    default_data, default_diag, default_cache = settings.paths(profile)
+    data_dir = opts.data_dir or default_data
+    diag_dir = opts.diagnostics_dir or default_diag
+    cache_dir = opts.cache_dir or default_cache
+    if profile.id != "egypt":
+        if opts.diagnostics_dir:
+            diag_dir = diag_dir / profile.id
+        if opts.cache_dir:
+            cache_dir = cache_dir / profile.id
+    opts = replace(opts, cache_dir=cache_dir)
+    store = ParquetStore(data_dir, profile=profile)
     errors: list[str] = []
 
-    stores = [*STORES, *opts.extra_stores]
+    stores = [
+        *profile.configured_stores(),
+        *(
+            s.model_copy(update={"currency": s.currency or profile.currency})
+            for s in opts.extra_stores
+        ),
+    ]
+    if len({s.slug for s in stores}) != len(stores):
+        raise ValueError("Extra stores must not duplicate a configured store slug")
+    checkpoint_profile = profile.model_copy(update={"stores": stores})
     if opts.stores:
+        unknown = set(opts.stores) - {s.slug for s in stores}
+        if unknown:
+            raise ValueError(
+                f"Unknown stores for profile {profile.id}: {', '.join(sorted(unknown))}"
+            )
         stores = [s for s in stores if s.slug in opts.stores]
     ckpt = Checkpoint(
-        (opts.cache_dir or settings.cache).parent / "checkpoints",
+        cache_dir.parent / "checkpoints",
         opts.checkpoint_key or ts.strftime("%Y-%m"),
+        profile=checkpoint_profile,
     )
     if opts.resume and (cs := ckpt.summary())["stores"]:
         notice(
@@ -268,8 +300,9 @@ async def run_pipeline(opts: RunOptions) -> tuple[Diagnostics, int]:
         history = store.read_offers()
         flags = flag_offers(
             records,
-            reference_prices=reference_prices(history, catalog),
+            reference_prices=reference_prices(history, catalog, profile=profile),
             factor=settings.outlier_factor,
+            profile=profile,
         )
         log.info("flags: %s", flags or "none")
 
@@ -335,7 +368,7 @@ async def run_pipeline(opts: RunOptions) -> tuple[Diagnostics, int]:
 
     # 7. derived exports rebuilt from the full history (merges/redirects apply retroactively)
     with phase("export series + stats + manifest"):
-        series_rows, stats_rows = build_series(store.read_offers(), catalog)
+        series_rows, stats_rows = build_series(store.read_offers(), catalog, profile=profile)
         store.write_series(series_rows)
         store.write_stats(stats_rows)
         _write_manifest(store, run, catalog, new_products)
@@ -352,10 +385,20 @@ async def run_pipeline(opts: RunOptions) -> tuple[Diagnostics, int]:
     return diag, 0
 
 
-def rebuild_exports(data_dir: Path, *, embeddings: bool = True) -> tuple[int, int]:
+def rebuild_exports(
+    data_dir: Path, *, embeddings: bool = True, profile: CountryProfile | None = None
+) -> tuple[int, int]:
+    profile = profile or settings.country_profile
+    with use_profile(profile):
+        return _rebuild_exports(data_dir, embeddings=embeddings, profile=profile)
+
+
+def _rebuild_exports(
+    data_dir: Path, *, embeddings: bool, profile: CountryProfile
+) -> tuple[int, int]:
     """Recompute groups, embeddings/neighbours, series and stats from what is on disk –
     no scraping. Use after manual catalog fixes or a storage-format upgrade."""
-    store = ParquetStore(data_dir)
+    store = ParquetStore(data_dir, profile=profile)
     catalog = store.read_catalog()
     for p in catalog.products.values():
         if not p.group:
@@ -365,18 +408,32 @@ def rebuild_exports(data_dir: Path, *, embeddings: bool = True) -> tuple[int, in
         if emb.error:
             log.warning("embeddings: %s", emb.error)
     store.write_catalog(catalog)
-    series_rows, stats_rows = build_series(store.read_offers(), catalog)
+    series_rows, stats_rows = build_series(store.read_offers(), catalog, profile=store.profile)
     store.write_series(series_rows)
     store.write_stats(stats_rows)
     _refresh_manifest(store, catalog)
     return len(series_rows), len(stats_rows)
 
 
-async def reindex(data_dir: Path, *, ai: bool = False, embeddings: bool = True) -> tuple[int, int]:
+async def reindex(
+    data_dir: Path,
+    *,
+    ai: bool = False,
+    embeddings: bool = True,
+    profile: CountryProfile | None = None,
+) -> tuple[int, int]:
+    profile = profile or settings.country_profile
+    with use_profile(profile):
+        return await _reindex(data_dir, ai=ai, embeddings=embeddings, profile=profile)
+
+
+async def _reindex(
+    data_dir: Path, *, ai: bool, embeddings: bool, profile: CountryProfile
+) -> tuple[int, int]:
     """Rebuild the catalog from scratch by replaying every historical offer through the
     current normalisation rules, then re-apply the enrichment cache (by product id) and
     recompute exports. Use after changing dedupe rules / the Arabic glossary."""
-    store = ParquetStore(data_dir)
+    store = ParquetStore(data_dir, profile=profile)
     offers = store.read_offers()
     old = store.read_catalog()
     listings = store.read_listings()
@@ -443,7 +500,7 @@ async def reindex(data_dir: Path, *, ai: bool = False, embeddings: bool = True) 
     catalog.redirects = _rebuild_redirects(old, catalog)
     store.write_catalog(catalog)
     store.write_listings(update_listings(listings, [], [], catalog))
-    return rebuild_exports(data_dir, embeddings=embeddings)
+    return rebuild_exports(data_dir, embeddings=embeddings, profile=store.profile)
 
 
 def _rebuild_redirects(old: Catalog, new: Catalog) -> dict[str, str]:
@@ -480,6 +537,7 @@ def _refresh_manifest(store: ParquetStore, catalog: Catalog) -> None:
     path = store.data_dir / "manifest.json"
     prev_ts, prev_runs = _previous_manifest(path)
     manifest = Manifest(
+        profile=store.profile.public(),
         schema_version=SCHEMA_VERSION,
         pipeline_version=__version__,
         parquet_format=PARQUET_FORMAT,
@@ -520,6 +578,7 @@ def _write_manifest(store: ParquetStore, run: Run, catalog: Catalog, new_product
         stores_failed=sum(r.status == ScrapeStatus.FAILED for r in run.stores),
     )
     manifest = Manifest(
+        profile=store.profile.public(),
         schema_version=SCHEMA_VERSION,
         pipeline_version=__version__,
         parquet_format=PARQUET_FORMAT,

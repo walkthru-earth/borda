@@ -96,7 +96,7 @@ All visitors receive the same HTML. This follows Google's guidance on
 [JavaScript SEO](https://developers.google.com/search/docs/crawling-indexing/javascript/javascript-seo-basics)
 and [initial-HTML product markup](https://developers.google.com/search/docs/appearance/structured-data/product-snippet).
 
-Structured prices come **only** from valid current seller offers in EGP, with recorded stock
+Structured prices come **only** from valid current seller offers in the snapshot’s comparison currency (EGP by default), with recorded stock
 states. Historical minima, missing prices, reviews and ratings are never invented. Snapshots
 without `current_offers` still get product metadata, but omit offer markup. Rebuild and deploy
 HTML and Parquet together so search metadata reflects the published data.
@@ -118,3 +118,22 @@ To regenerate just the static HTML after a build, run `node scripts/generate-seo
 `pnpm test` includes regression coverage for HTML/JSON escaping, canonical URLs, truthful offers,
 404 behavior, repeatable generation, and sitemap chunking. Generated HTML is build output, not
 checked-in source. Search engines decide whether and when to index pages or show rich results.
+
+### Publishing another country snapshot
+
+The UI and generated SEO use `manifest.profile`; older manifests fall back to Egypt. Each
+published instance serves one snapshot/profile, rather than offering a live country switch.
+Country copy, comparison currency, locale formatting and timezone follow that snapshot.
+Profiles and the interface currently support English and Arabic (`en` and `ar`) only.
+
+After generating another country's data with the Python CLI, select that snapshot for the
+frontend build (paths here are relative to `frontend/`):
+
+```bash
+BORDA_DATA_DIR=../data/uae pnpm run build
+```
+
+The sync script accepts an explicit source directory before `BORDA_DATA_DIR`, then falls back
+to `../data`. It publishes only the selected manifest and top-level Parquet exports, excluding
+nested country snapshots and raw history. Set `BASE_PATH`, `SITE_URL` and `VITE_SITE_ORIGIN`
+for the target deployment as well; changing a country profile does not change the site domain.

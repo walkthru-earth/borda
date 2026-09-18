@@ -12,23 +12,23 @@ The checked-in snapshot is sufficient to run the frontend; enrichment credential
 ```bash
 uv sync --all-groups
 cp .env.example .env            # add HETZNER_INFERENCE_TOKEN (never committed)
-uv run egmarket stores
-uv run egmarket run --max-pages 2 --no-ai --dry-run      # quick scraper check
-uv run egmarket run                                      # full run → data/ + diagnostics/
-uv run egmarket search اردوينو اونو                        # local name → official product
-uv run egmarket show arduino-uno-r3
-uv run egmarket diff                                     # last two runs
+uv run borda --profile egypt stores
+uv run borda run --max-pages 2 --no-ai --dry-run      # quick scraper check
+uv run borda run                                      # full run → data/ + diagnostics/
+uv run borda search اردوينو اونو                        # local name → official product
+uv run borda show arduino-uno-r3
+uv run borda diff                                     # last two runs
 uv run pytest -q
 ```
 
-Env knobs (all `EGMARKET_*`): see `.env.example` and `src/egmarket/config.py`.
+Runtime settings use `BORDA_*` (provider credentials retain their provider names): see `.env.example` and `src/borda/config.py`.
 
 ## Maintenance commands
 
 ```bash
-uv run egmarket rebuild    # recompute groups, embeddings/neighbours, series, stats, manifest
-uv run egmarket rebuild --no-embeddings  # offline: refresh derived data without model downloads
-uv run egmarket reindex    # replay ALL history through current dedupe rules (rule/glossary fixes
+uv run borda rebuild    # recompute groups, embeddings/neighbours, series, stats, manifest
+uv run borda rebuild --no-embeddings  # offline: refresh derived data without model downloads
+uv run borda reindex    # replay ALL history through current dedupe rules (rule/glossary fixes
                            # become retroactive); enrichment cache is re-applied via redirects
 ```
 
@@ -52,17 +52,19 @@ when only derived exports need refreshing.
 
 - `monthly-scrape.yml` – cron on the 1st: uv (cached) → pytest → scrape → … → commit `data/` +
   `diagnostics/` → upload logs as artifact → job summary table; turns red only if a store failed
-  (data is still committed). Secrets: `HETZNER_INFERENCE_TOKEN`, optional `EGMARKET_PROXY_URL`.
-  Manual dispatch accepts `stores`, `max_pages`, `ai`, `fresh`.
+  (data is still committed). Secrets: `HETZNER_INFERENCE_TOKEN`, optional `BORDA_PROXY_URL`.
+  Manual dispatch accepts `stores`, `max_pages`, `ai`, `fresh`. This workflow explicitly uses
+  `BORDA_PROFILE=egypt` to maintain the default published snapshot. Custom-country jobs must
+  select their profile and corresponding data/diagnostic paths separately.
   - **Logs:** every phase is a collapsible `::group::` with its duration; stores log progress every
     10 pages; enrichment logs every 5 batches; failures surface as `::error::`/`::warning::`
     annotations and in the step summary; the full log is the `diagnostics-<run>` artifact.
-  - **Checkpoints / resume:** `.cache/checkpoints/<YYYY-MM>/` keeps each finished store's raw
+  - **Checkpoints / resume:** `.cache/checkpoints/egypt/<profile-fingerprint>/<YYYY-MM>/` keeps each finished store's raw
     offers and a mirror of the LLM cache after every batch. The cache is saved with
     `if: always()`, so after a failure or the 170-min timeout, **"Re-run failed jobs"** (or the
     next dispatch that month) skips finished stores and already-enriched products and continues.
     Cleared automatically once a run persists. `--fresh` / `fresh=true` ignores it.
-- `ci.yml` – ruff + pytest, Node 24 search/filter regression tests (`pnpm test`), svelte-check + build.
+- `ci.yml` – installed `borda --help` smoke test, ruff + pytest, Node 24 search/filter regression tests (`pnpm test`), svelte-check + build.
 - `deploy-pages.yml` – rebuilds the SPA with the latest Parquet after each data commit.
 
 Pre-commit (ruff format/lint, uv lock, secrets guard, pytest): `uv tool install pre-commit && pre-commit install`.

@@ -1,6 +1,6 @@
 """Pydantic AI enrichment: correct names to the manufacturer's original, write a short
 technical description, add search tags – and unify products that turn out to be the
-same thing. Local (Egyptian) spellings are never lost: they stay in `Product.raw_names`.
+same thing. Local seller spellings are never lost: they stay in `Product.raw_names`.
 
 Token/cost discipline:
 * one structured (tool-call) request per batch of N products, compact JSON-lines input
@@ -33,13 +33,14 @@ from ..models import ENRICHMENT_VERSION, Enrichment, Product, utcnow
 from ..normalize import Catalog, slugify
 from ..normalize import names as _names
 from ..normalize.categories import assign_group
+from ..profiles import PublicProfile, default_profile
 from ..storage import ParquetStore
 from ..storage.parquet import read_enrichment_file
 
 log = logging.getLogger(__name__)
 
 INSTRUCTIONS = """\
-You normalise product listings scraped from Egyptian electronics/maker stores. Listings
+You normalise product listings scraped from electronics/maker stores in the selected country. Listings
 use local spellings, Arabic, or seller jargon; map each to the manufacturer's official product.
 For every input item return exactly one output item with the same `key`.
 - canonical_name: the official English product name, concise, no seller names, no marketing
@@ -60,7 +61,7 @@ For every input item return exactly one output item with the same `key`.
 - specs: up to 6 "Key: value" highlights actually supported by the name/seller text; omit
   guesses.
 - canonical_name_ar, description_ar, specs_ar: provide faithful, clear Arabic translations
-  of the English fields for Egyptian makers. Translate technical prose and spec labels,
+  of the English fields for local makers. Translate technical prose and spec labels,
   preserve brand names, model/part numbers (e.g. ESP32-WROOM-32, Arduino), numeric values,
   symbols and unit spellings (e.g. 3.3V, 1A, I2C) exactly as written in English. Do not
   transliterate identifiers, convert units, change specs, add claims or include HTML.
@@ -92,6 +93,7 @@ class EnrichmentBatch(BaseModel):
 @dataclass
 class BatchDeps:
     expected_keys: frozenset[str]
+    profile: PublicProfile = field(default_factory=lambda: default_profile().public())
 
 
 # Model is resolved at run time so importing this module never needs credentials; tests use
@@ -101,8 +103,18 @@ enrichment_agent: Agent[BatchDeps, EnrichmentBatch] = Agent(
     output_type=EnrichmentBatch,
     instructions=INSTRUCTIONS,
     retries=2,
-    name="egmarket-enricher",
+    name="borda-enricher",
 )
+
+
+@enrichment_agent.instructions
+def country_context(ctx: RunContext[BatchDeps]) -> str:
+    profile = ctx.deps.profile
+    return (
+        f"Market: {profile.country_name} ({profile.country_code}); "
+        f"currency: {profile.currency}; locales: {profile.locale}, {profile.locale_ar}. "
+        "Use this market context without changing technical product identities."
+    )
 
 
 @enrichment_agent.output_validator
@@ -336,7 +348,10 @@ class Enricher:
                 result = await self.agent.run(
                     prompt,
                     model=model,
-                    deps=BatchDeps(expected_keys=frozenset(x.key for x in inputs)),
+                    deps=BatchDeps(
+                        expected_keys=frozenset(x.key for x in inputs),
+                        profile=self.store.profile.public(),
+                    ),
                 )
             except Exception as exc:  # noqa: BLE001 - enrichment is best-effort
                 report.failed_batches += 1

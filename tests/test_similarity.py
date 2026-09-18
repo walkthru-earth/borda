@@ -3,10 +3,10 @@
 import numpy as np
 import pyarrow.parquet as pq
 
-from egmarket.enrich import embed
-from egmarket.normalize import Catalog
-from egmarket.normalize.categories import GROUPS, assign_group
-from egmarket.storage import ParquetStore
+from borda.enrich import embed
+from borda.normalize import Catalog
+from borda.normalize.categories import GROUPS, assign_group
+from borda.storage import ParquetStore
 
 
 def test_assign_group_rules():

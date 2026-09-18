@@ -1,7 +1,7 @@
 /**
  * Data layer: reads the pipeline's Parquet files in the browser with hyparquet.
  *
- * Strategy (mirrors src/egmarket/storage/parquet.py):
+ * Strategy (mirrors src/borda/storage/parquet.py):
  *  - manifest.json first (never cached): per-file sha256 / byte length / footer size.
  *    Every Parquet URL is versioned with the sha, so it is immutable and safely cacheable.
  *  - small, whole-table files (catalog, stats, embeddings) are fetched once as a single GET,
@@ -23,12 +23,14 @@ import {
 } from 'hyparquet';
 import { compressors } from 'hyparquet-compressors'; // zstd (+ WASM snappy) for the browser
 import { base } from '$app/paths';
+import type { MarketProfile } from './profile.js';
 
 export const DATA_BASE: string = ((import.meta.env.VITE_DATA_BASE as string | undefined) ?? `${base}/data`).replace(/\/$/, '');
-const CACHE_NAME = 'egmarket-parquet-v1';
+const CACHE_NAME = 'borda-parquet-v1';
 
 export interface FileInfo { sha256: string; bytes: number; footer: number | null; rows: number | null; row_groups: number | null }
 export interface Manifest {
+	profile?: MarketProfile;
 	schema_version: number;
 	pipeline_version: string;
 	parquet_format: string;

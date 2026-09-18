@@ -1,9 +1,10 @@
 /** Local, deterministic search across official names, seller names and taxonomy. */
 import type { CurrentOffer, Product, Stats } from './parquet';
+import { DEFAULT_PROFILE } from './profile.js';
 
 const SPLIT = /[^\p{L}\p{N}.+-]+/u;
 
-// Keep aligned with src/egmarket/normalize/names.py:_ARABIC_GLOSSARY.
+// Keep aligned with src/borda/normalize/names.py:_ARABIC_GLOSSARY.
 // These deterministic aliases work even when sellers provide only English names.
 const ARABIC_GLOSSARY: Record<string, string> = {
 	"اردوينو": "arduino",
@@ -181,6 +182,7 @@ export function search(index: Index, query: string, limit = 60): Product[] {
 }
 
 export interface ProductFilters {
+	currency?: string;
 	group?: string;
 	tag?: string;
 	seller?: string;
@@ -195,23 +197,25 @@ function validPrice(price: number | null | undefined): price is number {
 
 /** All offer constraints apply to the same listing, never different sellers. */
 export function matchingOffers(stats: Stats | undefined, filters: ProductFilters = {}): CurrentOffer[] {
+	const currency = filters.currency ?? stats?.currency ?? DEFAULT_PROFILE.currency;
 	return (stats?.current_offers ?? []).filter((offer) =>
-		(!filters.seller || offer.seller === filters.seller)
+		offer.currency === currency
+		&& (!filters.seller || offer.seller === filters.seller)
 		&& (!filters.inStock || offer.availability === 'in_stock')
-		&& (!(filters.minPrice != null && filters.minPrice > 0) || (offer.currency === 'EGP' && validPrice(offer.price) && offer.price >= filters.minPrice))
-		&& (!(filters.maxPrice != null && filters.maxPrice > 0) || (offer.currency === 'EGP' && validPrice(offer.price) && offer.price <= filters.maxPrice))
+		&& (!(filters.minPrice != null && filters.minPrice > 0) || (validPrice(offer.price) && offer.price >= filters.minPrice))
+		&& (!(filters.maxPrice != null && filters.maxPrice > 0) || (validPrice(offer.price) && offer.price <= filters.maxPrice))
 	);
 }
 
 /** Lowest eligible listed price, or null when no price is known. */
 export function matchingPrice(stats: Stats | undefined, filters: ProductFilters = {}): number | null {
 	if (stats?.current_offers !== undefined) {
-		const prices = matchingOffers(stats, filters).filter((offer) => offer.currency === 'EGP').map((offer) => offer.price).filter(validPrice);
+		const prices = matchingOffers(stats, filters).map((offer) => offer.price).filter(validPrice);
 		return prices.length ? Math.min(...prices) : null;
 	}
 	// Older snapshots cannot identify the price or availability of a particular seller.
 	if (filters.seller || filters.inStock) return null;
-	return stats?.currency === 'EGP' && validPrice(stats.latest_min) ? stats.latest_min : null;
+	return stats?.currency === (filters.currency ?? stats?.currency ?? DEFAULT_PROFILE.currency) && validPrice(stats.latest_min) ? stats.latest_min : null;
 }
 
 export function productMatchesFilters(product: Product, stats: Stats | undefined, filters: ProductFilters): boolean {
@@ -226,7 +230,7 @@ export function productMatchesFilters(product: Product, stats: Stats | undefined
 	if (hasPrice) {
 		// Without listing data a stock+price conjunction cannot be verified either.
 		if (filters.inStock) return false;
-		const price = matchingPrice(stats);
+		const price = matchingPrice(stats, { currency: filters.currency });
 		if (price == null || price < (filters.minPrice ?? 0) || ((filters.maxPrice ?? 0) > 0 && price > filters.maxPrice!)) return false;
 	}
 	return true;

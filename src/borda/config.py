@@ -7,11 +7,14 @@ from pathlib import Path
 from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from .profiles import CountryProfile, active_profile, load_profile
+
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="EGMARKET_", env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_prefix="BORDA_", env_file=".env", extra="ignore")
 
     repo_root: Path = Field(default_factory=lambda: Path.cwd())
+    profile: str = "egypt"
     data_dir: Path | None = None
     diagnostics_dir: Path | None = None
     cache_dir: Path | None = None
@@ -19,7 +22,7 @@ class Settings(BaseSettings):
     # scraping
     user_agent: str = (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/124.0 Safari/537.36 egmarket/0.1 (+price-history bot)"
+        "(KHTML, like Gecko) Chrome/124.0 Safari/537.36 borda/0.1 (+price-history bot)"
     )
     request_timeout_s: float = 30.0
     request_delay_s: float = 0.6
@@ -39,7 +42,7 @@ class Settings(BaseSettings):
     hetzner_base_url: str = "https://inference.hetzner.com/api/v1"
     hetzner_token: str | None = Field(
         default=None,
-        validation_alias=AliasChoices("HETZNER_INFERENCE_TOKEN", "EGMARKET_HETZNER_TOKEN"),
+        validation_alias=AliasChoices("HETZNER_INFERENCE_TOKEN", "BORDA_HETZNER_TOKEN"),
     )
 
     embeddings_enabled: bool = True  # ONNX MiniLM vectors for similarity search
@@ -49,16 +52,31 @@ class Settings(BaseSettings):
     outlier_factor: float = 8.0  # flag if price differs from product median by this factor
 
     @property
+    def country_profile(self) -> CountryProfile:
+        return active_profile.get() or load_profile(self.profile)
+
+    def paths(self, profile: CountryProfile | None = None) -> tuple[Path, Path, Path]:
+        profile = profile or self.country_profile
+        suffix = Path() if profile.id == "egypt" else Path(profile.id)
+        return (
+            self.data_dir or self.repo_root / "data" / suffix,
+            (self.diagnostics_dir or self.repo_root / "diagnostics") / suffix,
+            self.cache_dir / suffix
+            if self.cache_dir
+            else self.repo_root / ".cache" / suffix / "http",
+        )
+
+    @property
     def data(self) -> Path:
-        return self.data_dir or self.repo_root / "data"
+        return self.paths()[0]
 
     @property
     def diagnostics(self) -> Path:
-        return self.diagnostics_dir or self.repo_root / "diagnostics"
+        return self.paths()[1]
 
     @property
     def cache(self) -> Path:
-        return self.cache_dir or self.repo_root / ".cache" / "http"
+        return self.paths()[2]
 
 
 settings = Settings()

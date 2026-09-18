@@ -4,10 +4,10 @@ from decimal import Decimal
 
 import pyarrow.parquet as pq
 
-from egmarket import SCHEMA_VERSION
-from egmarket.models import Availability, OfferRecord, Run, ScrapeStatus, StoreReport
-from egmarket.normalize import Catalog, flag_offers
-from egmarket.storage import ParquetStore, build_index, build_series, reference_prices, search
+from borda import SCHEMA_VERSION
+from borda.models import Availability, OfferRecord, Run, ScrapeStatus, StoreReport
+from borda.normalize import Catalog, flag_offers
+from borda.storage import ParquetStore, build_index, build_series, reference_prices, search
 
 
 def _run(run_id: str, ts: datetime, rows: list[tuple[str, str, float | None]]) -> Run:
@@ -196,7 +196,7 @@ def test_foreign_prices_do_not_pollute_egp_stats_or_outlier_detection(tmp_path, 
 
 
 def test_enrichment_cache_roundtrip_keeps_product_details(tmp_path):
-    from egmarket.models import Enrichment
+    from borda.models import Enrichment
 
     store = ParquetStore(tmp_path)
     enrichment = Enrichment(
@@ -213,7 +213,7 @@ def test_enrichment_cache_roundtrip_keeps_product_details(tmp_path):
 
 
 def test_rebuild_manifest_keeps_unchanged_exports(tmp_path, make_offer):
-    from egmarket.pipeline import rebuild_exports
+    from borda.pipeline import rebuild_exports
 
     cat = Catalog()
     pid, _ = cat.resolve(make_offer("s1", "DHT22 sensor", 100), fuzzy_threshold=93)

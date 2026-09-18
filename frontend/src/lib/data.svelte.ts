@@ -1,7 +1,8 @@
 /** App-wide catalog cache (Svelte 5 runes). Loaded once, shared by list and product pages. */
 import { loadCatalog, loadManifest, loadStats, type Manifest, type Product, type Stats } from './parquet';
 import { buildIndex, type Index } from './search';
-import { formatNumber, tr } from './i18n.svelte';
+import { formatNumber, currencyLabel, market } from './i18n.svelte';
+import { resolveProfile } from './profile.js';
 
 export const GROUP_META: Record<string, { label: string; icon: string }> = {
 	'dev-boards': { label: 'Dev boards', icon: '🧩' },
@@ -54,6 +55,7 @@ class Catalog {
 			try {
 				const [manifest, products, stats] = await Promise.all([loadManifest(), loadCatalog(), loadStats()]);
 				this.manifest = manifest;
+				market.profile = resolveProfile(manifest.profile);
 				this.products = products;
 				this.stats = stats;
 				this.index = buildIndex(products);
@@ -72,8 +74,8 @@ class Catalog {
 
 export const catalog = new Catalog();
 
-export const fmtPrice = (v: number | null | undefined, cur = 'EGP'): string =>
-	v == null || !Number.isFinite(v) ? '—' : `${formatNumber(v)} ${cur === 'EGP' ? tr('EGP', 'ج.م') : cur}`.trim();
+export const fmtPrice = (v: number | null | undefined, cur = market.profile.currency): string =>
+	v == null || !Number.isFinite(v) ? '—' : `${formatNumber(v)} ${currencyLabel(cur)}`.trim();
 
 export const sellerName = (slug: string): string =>
 	slug.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());

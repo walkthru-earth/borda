@@ -1,7 +1,7 @@
 import pytest
 
-from egmarket.normalize import Catalog, canonical_rule, clean, match_key, numeric_signature, slugify
-from egmarket.normalize.tags import derive_tags
+from borda.normalize import Catalog, canonical_rule, clean, match_key, numeric_signature, slugify
+from borda.normalize.tags import derive_tags
 
 
 def test_clean_unifies_units_and_aliases():

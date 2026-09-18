@@ -9,10 +9,10 @@ from pydantic_ai.messages import ModelMessage, ModelResponse, ToolCallPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.models.test import TestModel
 
-from egmarket.enrich import BatchDeps, Enricher, EnrichmentBatch, build_model, enrichment_agent
-from egmarket.models import Enrichment
-from egmarket.normalize import Catalog
-from egmarket.storage import ParquetStore
+from borda.enrich import BatchDeps, Enricher, EnrichmentBatch, build_model, enrichment_agent
+from borda.models import Enrichment
+from borda.normalize import Catalog
+from borda.storage import ParquetStore
 
 
 def _fake_llm(canonical_by_key: dict[str, str]):
@@ -125,7 +125,7 @@ async def test_model_failure_is_reported_not_raised(tmp_path, make_offer):
 
 def test_build_model_hetzner_requires_token(monkeypatch):
     monkeypatch.delenv("HETZNER_INFERENCE_TOKEN", raising=False)
-    monkeypatch.setattr("egmarket.enrich.ai.settings.hetzner_token", None)
+    monkeypatch.setattr("borda.enrich.ai.settings.hetzner_token", None)
     with pytest.raises(RuntimeError):
         build_model("hetzner:Qwen/Qwen3.6-35B-A3B-FP8")
     monkeypatch.setenv("HETZNER_INFERENCE_TOKEN", "x")
@@ -146,7 +146,7 @@ def test_enrichment_model_normalises_tags():
 
 
 async def test_legacy_cache_rows_are_refreshed_once(tmp_path, make_offer):
-    from egmarket.models import ENRICHMENT_VERSION
+    from borda.models import ENRICHMENT_VERSION
 
     store = ParquetStore(tmp_path)
     cat = Catalog()
@@ -321,7 +321,7 @@ def test_legacy_parquet_without_arabic_columns_still_loads(tmp_path):
     import pyarrow as pa
     import pyarrow.parquet as pq
 
-    from egmarket.models import Product
+    from borda.models import Product
 
     store = ParquetStore(tmp_path)
     catalog = Catalog.from_products([Product(id="part", canonical_name="Part")])
@@ -352,7 +352,7 @@ def test_legacy_parquet_without_arabic_columns_still_loads(tmp_path):
 
 
 def test_newer_checkpoint_translations_override_older_persisted_cache(tmp_path):
-    from egmarket.models import ENRICHMENT_VERSION, utcnow
+    from borda.models import ENRICHMENT_VERSION, utcnow
 
     store = ParquetStore(tmp_path / "data")
     legacy = Enrichment(key="part", canonical_name="Part", description="Old", tags=[])
@@ -386,7 +386,7 @@ async def test_ai_cannot_merge_unpopulated_pcb_into_assembled_board(tmp_path, ma
 
 
 async def test_old_cached_ai_name_cannot_undo_accessory_split(tmp_path, make_offer):
-    from egmarket.models import utcnow
+    from borda.models import utcnow
 
     store = ParquetStore(tmp_path)
     catalog = Catalog()
@@ -416,7 +416,7 @@ async def test_old_cached_ai_name_cannot_undo_accessory_split(tmp_path, make_off
     ],
 )
 async def test_ai_cannot_merge_conflicting_explicit_variants(tmp_path, names, proposed):
-    from egmarket.models import Product
+    from borda.models import Product
 
     catalog = Catalog.from_products(
         [

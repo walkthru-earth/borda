@@ -44,7 +44,7 @@ class WooCommerceScraper(BaseScraper):
                     raw_name=_TAG_RE.sub("", p["name"]),
                     url=p["permalink"],
                     price=price,
-                    currency=prices.get("currency_code", "EGP"),
+                    currency=prices.get("currency_code") or self.currency,
                     availability=Availability.IN_STOCK
                     if p.get("is_in_stock")
                     else Availability.OUT_OF_STOCK,

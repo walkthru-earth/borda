@@ -9,10 +9,11 @@ import { resolve, dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parquetReadObjects } from 'hyparquet';
 import { compressors } from 'hyparquet-compressors';
+import { DEFAULT_PROFILE, resolveProfile } from '../src/lib/profile.js';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const BRAND = 'Borda | بوردة';
-const HOMEPAGE_DESCRIPTION = 'Find electronic components across Egyptian stores. Compare recorded prices and availability, explore price history, and search in English or Arabic.';
+const homepageDescription = (profile) => `Find electronic components across stores in ${profile.country_name}. Compare recorded prices and availability, explore price history, and search ${profile.languages.includes('ar') ? 'in English or Arabic' : 'the catalog'}.`;
 const GROUPS = { 'dev-boards': 'Development boards', 'microcontrollers-ics': 'Microcontrollers & ICs', sensors: 'Sensors', 'wireless-iot': 'Wireless & IoT', 'displays-leds': 'Displays & LEDs', 'motors-drivers': 'Motors & drivers', power: 'Power', 'passive-components': 'Passive components', semiconductors: 'Semiconductors', 'connectors-cables': 'Connectors & cables', prototyping: 'Prototyping', 'tools-instruments': 'Tools & instruments', '3d-printing-cnc': '3D printing & CNC', 'robotics-kits': 'Robotics & kits', other: 'Other components' };
 export const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
 const escapeJson = (value) => JSON.stringify(value).replace(/</g, '\\u003c').replace(/>/g, '\\u003e').replace(/&/g, '\\u0026').replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029');
@@ -20,9 +21,9 @@ const readable = (value) => String(value ?? '').replace(/\s+/g, ' ').trim();
 const category = (product) => GROUPS[product.group] ?? product.category ?? 'Electronic components';
 const safeUrl = (value) => { try { const parsed = new URL(value); return /^https?:$/.test(parsed.protocol) ? parsed.href : null; } catch { return null; } };
 const sellerName = (slug) => String(slug ?? '').replace(/-/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
-const price = (value) => `${Number(value).toLocaleString('en-GB', { maximumFractionDigits: 2 })} EGP`;
+const price = (value, profile) => `${Number(value).toLocaleString(profile.locale, { maximumFractionDigits: 2 })} ${profile.currency}`;
 const validDate = (value) => { if (value == null || value === '') return null; const date = new Date(value); return Number.isFinite(+date) ? date.toISOString() : null; };
-const dateText = (value) => validDate(value)?.slice(0, 10) ?? 'Date unavailable';
+const dateText = (value, profile) => validDate(value) ? new Date(value).toLocaleDateString(profile.locale, { timeZone: profile.timezone, day: 'numeric', month: 'short', year: 'numeric' }) : 'Date unavailable';
 const availabilityLabel = (value) => ({ in_stock: 'In stock', out_of_stock: 'Out of stock', preorder: 'Preorder', unknown: 'Stock unconfirmed' })[value] ?? 'Stock unconfirmed';
 const availabilitySchema = { in_stock: 'https://schema.org/InStock', out_of_stock: 'https://schema.org/OutOfStock', preorder: 'https://schema.org/PreOrder' };
 
@@ -38,7 +39,7 @@ export function productUrl(siteUrl, id) {
 }
 
 /** Never manufacture current offers from historical min/max or chart observations. */
-export function currentOffers(stats) {
+export function currentOffers(stats, profile = DEFAULT_PROFILE) {
   let rows = stats?.current_offers;
   if (typeof rows === 'string') { try { rows = JSON.parse(rows); } catch { return []; } }
   if (!Array.isArray(rows)) return [];
@@ -49,10 +50,10 @@ export function currentOffers(stats) {
     const previous = listings.get(key);
     if (!previous || +new Date(row.ts) >= +new Date(previous.ts)) listings.set(key, row);
   }
-  return [...listings.values()].filter((row) => row.currency === 'EGP' && typeof row.price === 'number' && Number.isFinite(row.price) && row.price >= 0);
+  return [...listings.values()].filter((row) => row.currency === profile.currency && typeof row.price === 'number' && Number.isFinite(row.price) && row.price >= 0);
 }
 
-export function productSchema(product, stats, siteUrl) {
+export function productSchema(product, stats, siteUrl, profile = DEFAULT_PROFILE) {
   const url = productUrl(siteUrl, product.id);
   const schema = { '@context': 'https://schema.org', '@type': 'Product', '@id': `${url}#product`, name: product.canonical_name, url, category: category(product) };
   if (product.description) schema.description = readable(product.description);
@@ -60,10 +61,10 @@ export function productSchema(product, stats, siteUrl) {
   if (image) schema.image = [image];
   if (product.brand) schema.brand = { '@type': 'Brand', name: product.brand };
   if (product.mpn) schema.mpn = product.mpn;
-  const offers = currentOffers(stats);
+  const offers = currentOffers(stats, profile);
   if (offers.length) {
     const prices = offers.map((offer) => offer.price);
-    schema.offers = { '@type': 'AggregateOffer', priceCurrency: 'EGP', lowPrice: Math.min(...prices), highPrice: Math.max(...prices), offerCount: offers.length, offers: offers.map((offer) => ({ '@type': 'Offer', url: safeUrl(offer.url), price: offer.price, priceCurrency: 'EGP', seller: { '@type': 'Organization', name: sellerName(offer.seller) }, ...(availabilitySchema[offer.availability] ? { availability: availabilitySchema[offer.availability] } : {}) })) };
+    schema.offers = { '@type': 'AggregateOffer', priceCurrency: profile.currency, lowPrice: Math.min(...prices), highPrice: Math.max(...prices), offerCount: offers.length, offers: offers.map((offer) => ({ '@type': 'Offer', url: safeUrl(offer.url), price: offer.price, priceCurrency: profile.currency, seller: { '@type': 'Organization', name: sellerName(offer.seller) }, ...(availabilitySchema[offer.availability] ? { availability: availabilitySchema[offer.availability] } : {}) })) };
   }
   return schema;
 }
@@ -83,7 +84,7 @@ const fallbackStyle = `<style data-borda-static-seo>#borda-static-content{max-wi
 // Remove it only after the app actually renders; a failed JS import leaves usable HTML.
 const fallbackCleanup = `<script data-borda-static-cleanup>(()=>{const fallback=document.getElementById('borda-static-content');if(!fallback)return;const cleanup=()=>{if(document.getElementById('main-content')){fallback.remove();observer.disconnect();return true}return false};const observer=new MutationObserver(cleanup);if(!cleanup())observer.observe(document.body,{childList:true,subtree:true})})();</script>`;
 
-function renderPage(shell, { title, description, canonical, image, schema, body }) {
+function renderPage(shell, { title, description, canonical, image, schema, body, profile = DEFAULT_PROFILE }) {
   const tags = [
     `<title data-borda-static-seo>${escapeHtml(title)}</title>`,
     `<meta data-borda-static-seo name="description" content="${escapeHtml(description)}">`,
@@ -91,6 +92,7 @@ function renderPage(shell, { title, description, canonical, image, schema, body 
     `<meta data-borda-static-seo name="robots" content="index,follow,max-image-preview:large">`,
     `<meta data-borda-static-seo property="og:site_name" content="${escapeHtml(BRAND)}">`,
     `<meta data-borda-static-seo property="og:type" content="website">`,
+    `<meta data-borda-static-seo property="og:locale" content="${escapeHtml(profile.locale.replace(/-/g, '_'))}">`,
     `<meta data-borda-static-seo property="og:title" content="${escapeHtml(title)}">`,
     `<meta data-borda-static-seo property="og:description" content="${escapeHtml(description)}">`,
     `<meta data-borda-static-seo property="og:url" content="${escapeHtml(canonical)}">`,
@@ -105,31 +107,33 @@ function renderPage(shell, { title, description, canonical, image, schema, body 
     .replace(/(<body\b[^>]*>)/i, (_, bodyTag) => `${bodyTag}\n<!-- borda-static-content:start --><main id="borda-static-content">${body}</main>${fallbackCleanup}<!-- borda-static-content:end -->`);
 }
 
-export function renderProductPage(shell, product, stats, siteUrl, relatedProducts = []) {
+export function renderProductPage(shell, product, stats, siteUrl, relatedProducts = [], profile = DEFAULT_PROFILE) {
   const url = productUrl(siteUrl, product.id);
   const name = readable(product.canonical_name);
-  const description = readable(product.description) || `Compare ${name} prices and recorded availability across Egyptian electronics stores. Explore specifications and price history on Borda.`;
-  const offers = currentOffers(stats);
+  const description = readable(product.description) || `Compare ${name} prices and recorded availability across electronics stores in ${profile.country_name}. Explore specifications and price history on Borda.`;
+  const offers = currentOffers(stats, profile);
   const image = safeUrl(product.image);
   const related = relatedProducts.filter((row) => row.id !== product.id).slice(0, 8);
   const body = `<nav aria-label="Breadcrumb"><a href="${escapeHtml(siteUrl)}/">Borda | بوردة</a> / ${escapeHtml(category(product))}</nav>
-<h1>${escapeHtml(name)}</h1>${product.canonical_name_ar ? `<p lang="ar" dir="rtl">${escapeHtml(product.canonical_name_ar)}</p>` : ''}
+<h1>${escapeHtml(name)}</h1>${profile.languages.includes('ar') && product.canonical_name_ar ? `<p lang="ar" dir="rtl">${escapeHtml(product.canonical_name_ar)}</p>` : ''}
 ${image ? `<img src="${escapeHtml(image)}" alt="${escapeHtml(name)}" loading="eager" width="260" height="220">` : ''}
-<p>${escapeHtml(description)}</p>${product.description_ar ? `<p lang="ar" dir="rtl">${escapeHtml(product.description_ar)}</p>` : ''}
+<p>${escapeHtml(description)}</p>${profile.languages.includes('ar') && product.description_ar ? `<p lang="ar" dir="rtl">${escapeHtml(product.description_ar)}</p>` : ''}
 <p>Category: ${escapeHtml(category(product))}${product.brand ? ` · Brand: ${escapeHtml(product.brand)}` : ''}${product.mpn ? ` · Part number: ${escapeHtml(product.mpn)}` : ''}</p>
 ${product.specs?.length ? `<h2>Technical specifications</h2><ul>${product.specs.map((spec) => `<li>${escapeHtml(spec)}</li>`).join('')}</ul>` : ''}
 <section><h2>Compare seller offers</h2><p class="notice">Prices and stock reflect the recorded dates below. Confirm details with the seller; shipping may cost extra.</p>
-${offers.length ? `<div class="table-wrap"><table><thead><tr><th scope="col">Seller</th><th scope="col">Price</th><th scope="col">Recorded availability</th><th scope="col">Checked</th></tr></thead><tbody>${offers.map((offer) => `<tr><td><a href="${escapeHtml(safeUrl(offer.url))}" rel="nofollow noopener">${escapeHtml(sellerName(offer.seller))}</a></td><td>${escapeHtml(price(offer.price))}</td><td>${escapeHtml(availabilityLabel(offer.availability))}</td><td>${escapeHtml(dateText(offer.ts))}</td></tr>`).join('')}</tbody></table></div>` : '<p>No current priced offers are available in this catalog snapshot.</p>'}</section>
+${offers.length ? `<div class="table-wrap"><table><thead><tr><th scope="col">Seller</th><th scope="col">Price</th><th scope="col">Recorded availability</th><th scope="col">Checked</th></tr></thead><tbody>${offers.map((offer) => `<tr><td><a href="${escapeHtml(safeUrl(offer.url))}" rel="nofollow noopener">${escapeHtml(sellerName(offer.seller))}</a></td><td>${escapeHtml(price(offer.price, profile))}</td><td>${escapeHtml(availabilityLabel(offer.availability))}</td><td>${escapeHtml(dateText(offer.ts, profile))}</td></tr>`).join('')}</tbody></table></div>` : '<p>No current priced offers are available in this catalog snapshot.</p>'}</section>
 ${related.length ? `<h2>Related components</h2><ul>${related.map((row) => `<li><a href="${escapeHtml(productUrl(siteUrl, row.id))}">${escapeHtml(row.canonical_name)}</a></li>`).join('')}</ul>` : ''}
-<p class="notice">The interactive catalog adds search, filtering, Arabic translation and price-history charts when JavaScript is enabled.</p><p><a href="${escapeHtml(siteUrl)}/">Explore all components</a></p>`;
-  return renderPage(shell, { title: `${name} — prices in Egypt · ${BRAND}`, description: description.slice(0, 170), canonical: url, image: image ?? `${siteUrl}/brand/borda-social.png`, schema: productSchema(product, stats, siteUrl), body });
+<p class="notice">The interactive catalog adds search, filtering${profile.languages.includes('ar') ? ', Arabic translation' : ''} and price-history charts when JavaScript is enabled.</p><p><a href="${escapeHtml(siteUrl)}/">Explore all components</a></p>`;
+  return renderPage(shell, { title: `${name} — prices in ${profile.country_name} · ${BRAND}`, description: description.slice(0, 170), canonical: url, image: image ?? `${siteUrl}/brand/borda-social.png`, schema: productSchema(product, stats, siteUrl, profile), body, profile });
 }
 
 export function renderHomePage(shell, products, manifest, siteUrl) {
+  const profile = resolveProfile(manifest.profile);
+  const description = homepageDescription(profile);
   const groups = Object.entries(manifest.groups ?? {}).sort((a, b) => b[1] - a[1]);
   const popular = [...products].sort((a, b) => (b.sellers?.length ?? 0) - (a.sellers?.length ?? 0) || a.canonical_name.localeCompare(b.canonical_name)).slice(0, 20);
-  const body = `<header><p>Borda | بوردة — Find. Compare. Build.</p><h1>Find electronic components in Egypt</h1><p lang="ar" dir="rtl">بوردة — ابحث عن المكونات الإلكترونية وقارن أسعار المتاجر المصرية.</p><p>${HOMEPAGE_DESCRIPTION}</p></header><p>Explore ${products.length.toLocaleString('en-GB')} components across ${groups.length} categories. Catalog updated ${escapeHtml(dateText(manifest.generated_at))}.</p><h2>Browse categories</h2><ul class="discovery">${groups.map(([group, count]) => `<li><a href="${escapeHtml(siteUrl)}/?group=${encodeURIComponent(group)}">${escapeHtml(GROUPS[group] ?? group)} (${Number(count).toLocaleString('en-GB')})</a></li>`).join('')}</ul><h2>Components from multiple stores</h2><ul>${popular.map((product) => `<li><a href="${escapeHtml(productUrl(siteUrl, product.id))}">${escapeHtml(product.canonical_name)}</a></li>`).join('')}</ul><p class="notice">Enable JavaScript to search, filter by price and seller, compare availability, and use the Arabic interface. Prices reflect recorded observations and exclude shipping.</p>`;
-  return renderPage(shell, { title: `Electronic components & prices in Egypt · ${BRAND}`, description: HOMEPAGE_DESCRIPTION, canonical: `${siteUrl}/`, image: `${siteUrl}/brand/borda-social.png`, schema: { '@context': 'https://schema.org', '@type': 'WebSite', '@id': `${siteUrl}/#website`, name: BRAND, url: `${siteUrl}/`, description: HOMEPAGE_DESCRIPTION, inLanguage: ['en', 'ar'] }, body });
+  const body = `<header><p>Borda | بوردة — Find. Compare. Build.</p><h1>Find electronic components in ${escapeHtml(profile.country_name)}</h1>${profile.languages.includes('ar') ? `<p lang="ar" dir="rtl">بوردة — ابحث عن المكونات الإلكترونية وقارن أسعار المتاجر في ${escapeHtml(profile.country_name_ar)}.</p>` : ''}<p>${escapeHtml(description)}</p></header><p>Explore ${products.length.toLocaleString(profile.locale)} components across ${groups.length} categories. Catalog updated ${escapeHtml(dateText(manifest.generated_at, profile))}.</p><h2>Browse categories</h2><ul class="discovery">${groups.map(([group, count]) => `<li><a href="${escapeHtml(siteUrl)}/?group=${encodeURIComponent(group)}">${escapeHtml(GROUPS[group] ?? group)} (${Number(count).toLocaleString(profile.locale)})</a></li>`).join('')}</ul><h2>Components from multiple stores</h2><ul>${popular.map((product) => `<li><a href="${escapeHtml(productUrl(siteUrl, product.id))}">${escapeHtml(product.canonical_name)}</a></li>`).join('')}</ul><p class="notice">Enable JavaScript to search, filter by price and seller, compare availability${profile.languages.includes('ar') ? ', and use the Arabic interface' : ''}. Prices reflect recorded observations and exclude shipping.</p>`;
+  return renderPage(shell, { title: `Electronic components & prices in ${profile.country_name} · ${BRAND}`, description, canonical: `${siteUrl}/`, image: `${siteUrl}/brand/borda-social.png`, schema: { '@context': 'https://schema.org', '@type': 'WebSite', '@id': `${siteUrl}/#website`, name: BRAND, url: `${siteUrl}/`, description, inLanguage: profile.languages }, body, profile });
 }
 
 export function renderNotFoundPage(shell, siteUrl) {
@@ -164,6 +168,7 @@ export async function generateSeo({ buildDir = join(ROOT, 'build'), dataDir = jo
   const shell = cleanShell(html);
   if (!shell.includes('</head>') || !/<body\b/i.test(shell)) throw new Error('Build index.html is not a valid HTML shell');
   const manifest = JSON.parse(manifestText);
+  const profile = resolveProfile(manifest.profile);
   const byId = new Map(products.map((product) => [product.id, product]));
   const stats = new Map(statsRows.map((row) => [row.product_id, row]));
   const seen = new Set();
@@ -180,14 +185,14 @@ export async function generateSeo({ buildDir = join(ROOT, 'build'), dataDir = jo
       const folder = join(buildDir, 'product', product.id);
       const related = (product.similar ?? []).map((id) => byId.get(id)).filter(Boolean);
       await mkdir(folder, { recursive: true });
-      await writeFile(join(folder, 'index.html'), renderProductPage(shell, product, stats.get(product.id), siteUrl, related));
+      await writeFile(join(folder, 'index.html'), renderProductPage(shell, product, stats.get(product.id), siteUrl, related, profile));
     }
   }));
   await writeFile(join(buildDir, 'index.html'), renderHomePage(shell, products, manifest, siteUrl));
   await writeFile(join(buildDir, '404.html'), renderNotFoundPage(shell, siteUrl));
   for (const [filename, content] of sitemapFiles(products, siteUrl, manifest.generated_at)) await writeFile(join(buildDir, filename), content);
   await writeFile(join(buildDir, 'robots.txt'), `User-agent: *\nAllow: /\n\nSitemap: ${siteUrl}/sitemap.xml\n`);
-  console.log(`Generated SEO HTML for ${products.length.toLocaleString('en-GB')} products, homepage, sitemaps and robots.txt (${siteUrl}).`);
+  console.log(`Generated SEO HTML for ${products.length.toLocaleString(profile.locale)} products, homepage, sitemaps and robots.txt (${siteUrl}).`);
   return { products: products.length, siteUrl };
 }
 

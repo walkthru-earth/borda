@@ -4,7 +4,7 @@
 
 <h1 align="center">Borda | بوردة</h1>
 
-<p align="center">Find the right electronics part, at the right shop, in Egypt.</p>
+<p align="center">Find the right electronics part, at the right shop. Starting with Egypt.</p>
 
 <p align="center">
   <a href="https://walkthru.earth/borda">Explore Borda</a> ·
@@ -12,6 +12,7 @@
 </p>
 
 - Search components in English or Arabic.
+- Use the default Egypt catalog or configure a separate country deployment.
 - Filter by category, seller, recorded stock and budget.
 - Compare store listings and price history.
 - Discover related parts, specifications and datasheets.
@@ -35,19 +36,21 @@ check the seller before buying.
 
 - [Architecture](docs/architecture.md)
 - [Data and snapshot contracts](docs/data.md)
-- [Scraping and enrichment](docs/pipeline.md)
+- [Country profiles and scraping](docs/pipeline.md)
 - [Frontend, Arabic and search](docs/frontend.md)
 - [Development and deployment](docs/development.md)
 - [Brand assets](docs/brand/README.md)
 
 Contributor and coding-agent guidance: [AGENTS.md](AGENTS.md).
 
+License: [CC BY 4.0](LICENSE).
+
 ## Citation
 
 ```bibtex
 @software{borda,
   author  = {Youssef Harby, Myagmarjargal Mendbayar},
-  title   = {Borda: Electronic Component Search and Price Comparison in Egypt},
+  title   = {Borda: Electronic Component Search and Price Comparison},
   year    = {2026},
   url     = {https://github.com/walkthru-earth/borda},
   license = {CC-BY-4.0},

@@ -1,6 +1,6 @@
 # Borda | بوردة
 
-An Egyptian component finder for makers, engineering students, and hardware builders.
+A component finder for makers, engineering students, and hardware builders, launched in Egypt.
 
 [Website](https://walkthru.earth/borda) · [Source code](https://github.com/walkthru-earth/borda)
 
@@ -24,7 +24,7 @@ An Egyptian component finder for makers, engineering students, and hardware buil
 - `frontend/static/brand/borda-social.png`: generated square Arabic launch graphic.
 - `frontend/static/brand/borda-mark.svg`: simplified scalable companion mark for navigation and favicon.
 
-The PNGs were created with the built-in image generation tool. The SVG is a hand-authored simplified companion for small UI sizes. Preserve the original PNGs; do not stretch, recolor, or crop away the wordmark. The public name is Borda; the Python package and CLI remain `egmarket`.
+The PNGs were created with the built-in image generation tool. The SVG is a hand-authored simplified companion for small UI sizes. Preserve the original PNGs; do not stretch, recolor, or crop away the wordmark. The public name, Python package and CLI are Borda (`borda`).
 
 ## Egyptian Arabic launch caption
 

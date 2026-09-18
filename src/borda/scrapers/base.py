@@ -1,6 +1,6 @@
 """Scraper contract. A scraper turns one store into an async stream of RawOffer.
 
-Adding a store: add a `Store` entry in `stores.py`. Adding a platform: subclass
+Adding a store: add a store entry in the selected country profile JSON. Adding a platform: subclass
 `BaseScraper`, implement `iter_offers`, and register it in `PLATFORMS` (registry.py)."""
 
 from __future__ import annotations
@@ -11,25 +11,15 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl, ValidationError
+from pydantic import ValidationError
 
+from ..config import settings
 from ..http import Fetcher
-from ..models import RawOffer, ScrapeStatus, Slug, StoreReport
+from ..models import RawOffer, ScrapeStatus, StoreReport
 from ..observability import Progress
+from ..profiles import StoreConfig as Store
 
 log = logging.getLogger(__name__)
-
-
-class Store(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    slug: Slug
-    name: str
-    base_url: HttpUrl
-    platform: str
-    enabled: bool = True
-    note: str | None = None
-    params: dict[str, Any] = Field(default_factory=dict)
 
 
 class BaseScraper(ABC):
@@ -48,6 +38,10 @@ class BaseScraper(ABC):
     def base(self) -> str:
         return str(self.store.base_url).rstrip("/")
 
+    @property
+    def currency(self) -> str:
+        return self.store.currency or settings.country_profile.currency
+
     @abstractmethod
     def iter_offers(self) -> AsyncIterator[RawOffer]:
         """Yield offers; raise on fatal store-level failures."""
@@ -55,6 +49,7 @@ class BaseScraper(ABC):
     def make_offer(self, **data: Any) -> RawOffer | None:
         """Validate a single offer; invalid rows are logged, not fatal."""
         data.setdefault("seller", self.store.slug)
+        data.setdefault("currency", self.currency)
         try:
             return RawOffer.model_validate(data)
         except ValidationError as exc:

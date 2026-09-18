@@ -14,7 +14,7 @@ class ShopifyScraper(BaseScraper):
     page_size = 250
 
     async def iter_offers(self) -> AsyncIterator[RawOffer]:
-        currency = self.store.params.get("currency", "EGP")
+        currency = self.store.params.get("currency", self.currency)
         for page in range(1, self.max_pages + 1):
             data = await self.fetch.json(
                 f"{self.base}/products.json", params={"limit": self.page_size, "page": page}

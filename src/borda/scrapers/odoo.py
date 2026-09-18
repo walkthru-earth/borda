@@ -57,7 +57,8 @@ class OdooScraper(BaseScraper):
                     raw_name=name,
                     url=url,
                     price=price,
-                    currency=(cur_node.attributes.get("content") if cur_node else None) or "EGP",
+                    currency=(cur_node.attributes.get("content") if cur_node else None)
+                    or self.currency,
                     availability=availability,
                     image=urljoin(self.base, img.attributes["src"])
                     if img and img.attributes.get("src")

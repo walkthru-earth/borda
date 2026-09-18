@@ -1,11 +1,12 @@
 import type { CurrentOffer, Point, Stats } from './parquet';
+import { DEFAULT_PROFILE } from './profile.js';
 
 /** Prefer the pipeline's seller-snapshot offers. An empty snapshot is authoritative:
  * historical listings must never come back as current buying recommendations.
  * Older exports lack snapshots, so retain only the last observed batch per seller
  * and expose that weaker source to the caller for explicit historical labeling.
  */
-export function productOffers(stats: Stats | undefined, history: Point[]) {
+export function productOffers(stats: Stats | undefined, history: Point[], preferredCurrency?: string) {
 	const source = stats?.current_offers !== undefined ? 'current' : 'history';
 	let rows: CurrentOffer[];
 	if (stats?.current_offers !== undefined) {
@@ -27,7 +28,7 @@ export function productOffers(stats: Stats | undefined, history: Point[]) {
 		}
 	}
 	const offers = [...listings.values()].sort((a, b) => Number(b.availability === 'in_stock') - Number(a.availability === 'in_stock') || a.currency.localeCompare(b.currency) || (a.price ?? Infinity) - (b.price ?? Infinity));
-	const currency = stats?.currency ?? offers.find((offer) => offer.price != null)?.currency ?? 'EGP';
+	const currency = preferredCurrency ?? stats?.currency ?? offers.find((offer) => offer.price != null)?.currency ?? DEFAULT_PROFILE.currency;
 	const priced = offers.filter((offer) => offer.price != null && offer.currency === currency);
 	const bestOffer = priced.filter((offer) => offer.availability === 'in_stock').reduce<CurrentOffer | null>((best, offer) => !best || offer.price! < best.price! ? offer : best, null);
 	const lowestPrice = priced.reduce<number | null>((best, offer) => best == null ? offer.price : Math.min(best, offer.price!), null);

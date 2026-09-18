@@ -42,7 +42,7 @@ class EasyTestScraper(BaseScraper):
                     raw_name=title,
                     url=url,
                     price=a.get("data-et-price"),
-                    currency="EGP",
+                    currency=self.currency,
                     availability=Availability.IN_STOCK if stock > 0 else Availability.OUT_OF_STOCK,
                     image=a.get("data-et-image") or None,
                     extra={"stock": stock} if stock else {},

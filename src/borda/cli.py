@@ -1,4 +1,4 @@
-"""Command line: `egmarket run|stores|search|rebuild|diff|show`."""
+"""Command line: `borda run|stores|search|rebuild|diff|show`."""
 
 from __future__ import annotations
 
@@ -13,13 +13,15 @@ import pyarrow.compute as pc
 from .config import settings
 from .observability import setup_logging
 from .pipeline import RunOptions, rebuild_exports, reindex, run_pipeline
-from .scrapers import STORES
 from .storage import ParquetStore, build_index, search
 
 
 def _p() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="egmarket", description=__doc__)
+    p = argparse.ArgumentParser(prog="borda", description=__doc__)
     p.add_argument("-v", "--verbose", action="store_true")
+    p.add_argument(
+        "--profile", help="country profile name (egypt) or JSON path; defaults to BORDA_PROFILE"
+    )
     sub = p.add_subparsers(dest="cmd", required=True)
 
     r = sub.add_parser("run", help="scrape all stores and update history/exports")
@@ -61,12 +63,16 @@ def _p() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = _p().parse_args(argv)
+    if args.profile:
+        settings.profile = args.profile
+    profile = settings.country_profile
     setup_logging(args.verbose)
 
     if args.cmd == "run":
         diag, code = asyncio.run(
             run_pipeline(
                 RunOptions(
+                    profile=profile,
                     stores=args.stores,
                     max_pages=args.max_pages,
                     ai=not args.no_ai,
@@ -87,12 +93,12 @@ def main(argv: list[str] | None = None) -> int:
         return code
 
     if args.cmd == "stores":
-        for s in STORES:
+        for s in profile.configured_stores():
             flag = "on " if s.enabled else "off"
             print(f"{flag} {s.slug:18} {s.platform:12} {s.base_url}  {s.note or ''}")
         return 0
 
-    store = ParquetStore(settings.data)
+    store = ParquetStore(settings.data, profile=profile)
 
     if args.cmd == "search":
         idx = build_index(store.read_catalog().sorted_products())
@@ -101,13 +107,15 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.cmd == "rebuild":
-        points, products = rebuild_exports(settings.data, embeddings=not args.no_embeddings)
+        points, products = rebuild_exports(
+            settings.data, embeddings=not args.no_embeddings, profile=profile
+        )
         print(f"rebuilt {points} series points for {products} products")
         return 0
 
     if args.cmd == "reindex":
         points, products = asyncio.run(
-            reindex(settings.data, ai=args.ai, embeddings=not args.no_embeddings)
+            reindex(settings.data, ai=args.ai, embeddings=not args.no_embeddings, profile=profile)
         )
         print(f"reindexed: {products} products, {points} series points")
         return 0
@@ -127,15 +135,20 @@ def _diff(store: ParquetStore, top: int) -> int:
         return 1
     prev_id, cur_id = run_ids[-2], run_ids[-1]
     catalog = store.read_catalog()
-    offers = store.read_offers(["run_id", "product_id", "price", "flags"])
+    offers = store.read_offers(
+        ["run_id", "product_id", "seller", "url", "price", "currency", "flags"]
+    )
+    offers = offers.filter(pc.equal(offers["currency"], store.profile.currency))
 
     def by_product(run_id: str) -> dict[str, float]:
         t = offers.filter(pc.equal(offers["run_id"], run_id)).to_pydict()
         m: dict[str, float] = {}
-        for pid, price, flags in zip(t["product_id"], t["price"], t["flags"], strict=True):
-            if price is None or flags:
+        for pid, seller, url, price, flags in zip(
+            t["product_id"], t["seller"], t["url"], t["price"], t["flags"], strict=True
+        ):
+            if price is None or price <= 0 or flags:
                 continue
-            pid = catalog.resolve_id(pid)
+            pid = catalog.resolve_listing(pid, seller, url)
             m[pid] = min(m.get(pid, price), price)
         return m
 

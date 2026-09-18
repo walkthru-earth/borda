@@ -91,7 +91,7 @@ class WixScraper(BaseScraper):
         model = await self.fetch.json(f"{self.base}/_api/v2/dynamicmodel", use_cache=False)
         token = model["apps"][WIX_STORES_APP_ID]["instance"]
         product_path = self.store.params.get("product_path", "product-page")
-        currency = self.store.params.get("currency", "EGP")
+        currency = self.store.params.get("currency", self.currency)
         offset, total = 0, None
         while (total is None or offset < total) and self.pages < self.max_pages:
             data = await self.fetch.post_json(
@@ -165,7 +165,7 @@ class WixScraper(BaseScraper):
                 raw_name=ld.get("name", ""),
                 url=offers.get("url") or url,
                 price=offers.get("price") or offers.get("lowPrice"),
-                currency=offers.get("priceCurrency") or "EGP",
+                currency=offers.get("priceCurrency") or self.currency,
                 availability=_AVAIL.get(avail, Availability.UNKNOWN),
                 sku=ld.get("sku") or None,
                 brand=brand.get("name") if isinstance(brand, dict) else None,

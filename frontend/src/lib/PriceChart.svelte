@@ -1,7 +1,7 @@
 <script lang="ts">
 	import type { Point, Stats } from './parquet';
 	import { fmtPrice, sellerName } from './data.svelte';
-	import { tr, formatNumber, dateLocale } from './i18n.svelte';
+	import { tr, formatNumber, dateLocale, dateOptions, market, currencyName } from './i18n.svelte';
 
 	let { points }: { points: Point[]; stats?: Stats } = $props();
 	const W = 720, H = 310, PAD = { l: 62, r: 28, t: 25, b: 37 };
@@ -12,7 +12,7 @@
 	let svg = $state<SVGSVGElement | null>(null);
 	let valid = $derived(points.filter((point) => point.price != null && Number.isFinite(point.price) && point.price >= 0 && Number.isFinite(+point.ts)));
 	let currencies = $derived([...new Set(valid.map((point) => point.currency))].sort());
-	let currency = $derived(currencies.includes(selectedCurrency) ? selectedCurrency : currencies.includes('EGP') ? 'EGP' : currencies[0] ?? 'EGP');
+	let currency = $derived(currencies.includes(selectedCurrency) ? selectedCurrency : currencies.includes(market.profile.currency) ? market.profile.currency : currencies[0] ?? market.profile.currency);
 	let currencyPoints = $derived(valid.filter((point) => point.currency === currency));
 	let latest = $derived(currencyPoints.reduce((value, point) => Math.max(value, +point.ts), 0));
 	let priced = $derived(currencyPoints.filter((point) => period === 'all' || +point.ts >= latest - Number(period) * 86400000).sort((a, b) => +a.ts - +b.ts));
@@ -37,7 +37,7 @@
 	const sy = (value: number) => PAD.t + (1 - (value - y0) / (y1 - y0 || 1)) * (H - PAD.t - PAD.b);
 	let yTicks = $derived(Array.from({ length: 5 }, (_, i) => y0 + (i * (y1 - y0)) / 4));
 	let xTicks = $derived.by(() => { const unique = [...new Set(xs)].sort((a, b) => a - b); if (unique.length <= 4) return unique; return [...new Set([unique[0], unique[Math.floor((unique.length - 1) / 3)], unique[Math.floor(2 * (unique.length - 1) / 3)], unique[unique.length - 1]])]; });
-	const fmtDate = (time: number) => new Date(time).toLocaleDateString(dateLocale(), { day: 'numeric', month: 'short', ...(x1 - x0 > 31536000000 ? { year: '2-digit' as const } : {}) });
+	const fmtDate = (time: number) => new Date(time).toLocaleDateString(dateLocale(), { ...dateOptions(), day: 'numeric', month: 'short', ...(x1 - x0 > 31536000000 ? { year: '2-digit' as const } : {}) });
 	const fmtTick = (value: number) => value >= 1000 ? `${formatNumber(Number((value / 1000).toFixed(value >= 10000 ? 0 : 1)))}${tr('k', ' ألف')}` : formatNumber(Number(value.toFixed(value < 10 ? 1 : 0)));
 	const stockLabel = (value: string) => ({ in_stock: tr("In stock", "متوفر"), out_of_stock: tr("Out of stock", "غير متوفر"), preorder: tr("Preorder", "طلب مسبق"), unknown: tr("Unconfirmed", "غير مؤكد") }[value] ?? tr("Unconfirmed", "غير مؤكد"));
 	const color = (seller: string) => palette[sellers.indexOf(seller) % palette.length];
@@ -54,7 +54,7 @@
 </script>
 
 {#if valid.length === 0}<div class="empty">{tr("No priced observations yet. Check back after the next catalog update.", "لم تُسجل أسعار بعد. يمكنك العودة بعد التحديث القادم للكتالوج.")}</div>{:else}
-	<div class="chart-toolbar"><span class="unit">{tr('Prices in', 'الأسعار بعملة')} {currency === 'EGP' ? tr('EGP', 'الجنيه المصري') : currency}</span><div class="controls">{#if currencies.length > 1}<label><span class="sr-only">{tr("Chart currency", "عملة الرسم البياني")}</span><select value={currency} onchange={(event) => selectedCurrency = event.currentTarget.value} aria-label={tr("Chart currency", "عملة الرسم البياني")}>{#each currencies as unit (unit)}<option value={unit}>{unit}</option>{/each}</select></label>{/if}<label><span class="sr-only">{tr("Price history period", "فترة سجل الأسعار")}</span><select bind:value={period} aria-label={tr("Price history period", "فترة سجل الأسعار")}><option value="all">{tr("All history", "كل الفترات")}</option><option value="90">{tr("Last 90 days", "آخر ٩٠ يوماً")}</option><option value="30">{tr("Last 30 days", "آخر ٣٠ يوماً")}</option></select></label></div></div>
+	<div class="chart-toolbar"><span class="unit">{tr('Prices in', 'الأسعار بعملة')} {currencyName(currency)}</span><div class="controls">{#if currencies.length > 1}<label><span class="sr-only">{tr("Chart currency", "عملة الرسم البياني")}</span><select value={currency} onchange={(event) => selectedCurrency = event.currentTarget.value} aria-label={tr("Chart currency", "عملة الرسم البياني")}>{#each currencies as unit (unit)}<option value={unit}>{unit}</option>{/each}</select></label>{/if}<label><span class="sr-only">{tr("Price history period", "فترة سجل الأسعار")}</span><select bind:value={period} aria-label={tr("Price history period", "فترة سجل الأسعار")}><option value="all">{tr("All history", "كل الفترات")}</option><option value="90">{tr("Last 90 days", "آخر ٩٠ يوماً")}</option><option value="30">{tr("Last 30 days", "آخر ٣٠ يوماً")}</option></select></label></div></div>
 	<svg direction="ltr" bind:this={svg} viewBox="0 0 {W} {H}" role="img" aria-label={tr(`Recorded price history in ${currency} across ${sellers.length} sellers. A table of all displayed observations follows the chart.`, `سجل الأسعار بعملة ${currency} لدى ${formatNumber(sellers.length)} بائعين. يتبع الرسم جدول بكل البيانات المعروضة.`)} onpointermove={pick} onpointerdown={pick} onpointerleave={() => hover = null}>
 		<title>{tr('Recorded prices in', 'الأسعار المسجلة بعملة')} {currency}</title><desc>{tr("Each line follows one seller listing. Filled dots indicate recorded in-stock availability. Open dots indicate other or unknown availability.", "يمثل كل خط عرضاً لدى بائع. النقاط الممتلئة تعني أن المنتج كان متوفراً، والفارغة تعني عدم توفره أو أن التوفر غير مؤكد.")}</desc>
 		{#each yTicks as value (value)}<line x1={PAD.l} x2={W - PAD.r} y1={sy(value)} y2={sy(value)} class="grid-line" /><text x={PAD.l - 10} y={sy(value) + 4} class="tick" text-anchor="end">{fmtTick(value)}</text>{/each}
@@ -63,10 +63,10 @@
 		{#each series as group, i (i)}<polyline fill="none" stroke={color(group[0].seller)} stroke-width="2.5" stroke-linejoin="round" points={group.map((point) => `${sx(+point.ts)},${sy(point.price as number)}`).join(' ')} />{#each group as point, j (j)}<circle cx={sx(+point.ts)} cy={sy(point.price as number)} r={activePoint === point ? 6 : 3.6} fill={point.availability === 'in_stock' ? color(point.seller) : 'var(--surface, #fff)'} stroke={color(point.seller)} stroke-width="2" />{/each}{/each}
 		{#if activePoint}<line x1={sx(+activePoint.ts)} x2={sx(+activePoint.ts)} y1={PAD.t} y2={H - PAD.b} class="crosshair" />{/if}
 	</svg>
-	<div class="chart-readout" aria-live="polite">{#if activePoint}<strong>{sellerName(activePoint.seller)} · {fmtPrice(activePoint.price, currency)}</strong><span>{activePoint.ts.toLocaleDateString(dateLocale())} · {stockLabel(activePoint.availability)}</span>{:else}<span>{tr("Median", "الوسيط")} <strong>{fmtPrice(median, currency)}</strong></span><span>{tr(`${formatNumber(priced.length)} recorded ${priced.length === 1 ? 'price' : 'prices'}`, `${formatNumber(priced.length)} من الأسعار المسجلة`)}</span>{/if}</div>
+	<div class="chart-readout" aria-live="polite">{#if activePoint}<strong>{sellerName(activePoint.seller)} · {fmtPrice(activePoint.price, currency)}</strong><span>{activePoint.ts.toLocaleDateString(dateLocale(),dateOptions())} · {stockLabel(activePoint.availability)}</span>{:else}<span>{tr("Median", "الوسيط")} <strong>{fmtPrice(median, currency)}</strong></span><span>{tr(`${formatNumber(priced.length)} recorded ${priced.length === 1 ? 'price' : 'prices'}`, `${formatNumber(priced.length)} من الأسعار المسجلة`)}</span>{/if}</div>
 	<ul class="legend">{#each sellers as seller (seller)}<li><span class="swatch" style:background={color(seller)}></span>{sellerName(seller)}</li>{/each}</ul>
 	<p class="chart-hint">{tr('Open dots: stock unavailable or unconfirmed. Dashed line: median.', 'النقاط الفارغة: غير متوفر أو غير مؤكد. الخط المتقطع: الوسيط.')}{#if period !== 'all'} {tr('Period ends at the latest recorded observation.', 'تنتهي الفترة عند آخر رصد مسجل.')}{/if}</p>
-	<details class="table-disclosure"><summary>{tr("View price history as a table", "اعرض سجل الأسعار في جدول")}</summary><div class="table-scroll"><table><caption>{tr('Displayed price observations in', 'الأسعار المعروضة بعملة')} {currency}</caption><thead><tr><th scope="col">{tr("Date", "التاريخ")}</th><th scope="col">{tr("Seller", "البائع")}</th><th scope="col">{tr("Price", "السعر")}</th><th scope="col">{tr("Availability", "التوفر")}</th></tr></thead><tbody>{#each [...priced].reverse() as point, index (index)}<tr><td>{point.ts.toLocaleDateString(dateLocale())}</td><td>{sellerName(point.seller)}</td><td>{fmtPrice(point.price, currency)}</td><td>{stockLabel(point.availability)}</td></tr>{/each}</tbody></table></div></details>
+	<details class="table-disclosure"><summary>{tr("View price history as a table", "اعرض سجل الأسعار في جدول")}</summary><div class="table-scroll"><table><caption>{tr('Displayed price observations in', 'الأسعار المعروضة بعملة')} {currency}</caption><thead><tr><th scope="col">{tr("Date", "التاريخ")}</th><th scope="col">{tr("Seller", "البائع")}</th><th scope="col">{tr("Price", "السعر")}</th><th scope="col">{tr("Availability", "التوفر")}</th></tr></thead><tbody>{#each [...priced].reverse() as point, index (index)}<tr><td>{point.ts.toLocaleDateString(dateLocale(),dateOptions())}</td><td>{sellerName(point.seller)}</td><td>{fmtPrice(point.price, currency)}</td><td>{stockLabel(point.availability)}</td></tr>{/each}</tbody></table></div></details>
 {/if}
 
 <style>

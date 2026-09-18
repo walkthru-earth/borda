@@ -1,4 +1,4 @@
-name: Monthly market scrape
+name: Monthly Borda catalog scrape
 
 on:
   schedule:
@@ -23,7 +23,7 @@ on:
         default: false
 
 concurrency:
-  group: market-scrape
+  group: borda-scrape
   cancel-in-progress: false # never abort a half-finished monthly run
 
 permissions:
@@ -31,7 +31,8 @@ permissions:
 
 env:
   UV_LOCKED: "1"
-  EGMARKET_REQUEST_DELAY_S: "0.6"
+  BORDA_PROFILE: egypt # this workflow maintains the default published Egypt snapshot
+  BORDA_REQUEST_DELAY_S: "0.6"
 
 jobs:
   scrape:
@@ -54,7 +55,7 @@ jobs:
         run: uv run pytest -q
 
       # .cache/ holds three resumable things, none of them committed:
-      #   .cache/checkpoints/<YYYY-MM>/  per-store raw offers + enrichment mirror -> a re-run
+      #   .cache/checkpoints/egypt/<fingerprint>/<YYYY-MM>/ per-store offers + enrichment mirror
       #                                  or "Re-run failed jobs" continues where it stopped
       #   .cache/http/                   fetched pages (TTL) -> retried stores are fast
       #   .cache/hf/                     the MiniLM ONNX model (23 MB)
@@ -70,21 +71,29 @@ jobs:
 
       - name: Checkpoint status
         run: |
-          month=$(date -u +%Y-%m)
-          if [ -d ".cache/checkpoints/$month" ]; then
-            echo "::notice::Resuming month $month – checkpointed stores: $(ls .cache/checkpoints/$month | grep -c report.json)"
-            ls -la ".cache/checkpoints/$month"
-          else
-            echo "no checkpoint for $month – fresh run"
-          fi
+          uv run python - <<'PY'
+          from datetime import datetime, timezone
+          from borda.checkpoint import Checkpoint
+          from borda.config import settings
+
+          month = datetime.now(timezone.utc).strftime("%Y-%m")
+          profile = settings.country_profile
+          effective_profile = profile.model_copy(update={"stores": profile.configured_stores()})
+          checkpoint = Checkpoint(settings.cache.parent / "checkpoints", month, profile=effective_profile)
+          summary = checkpoint.summary()
+          if summary["stores"]:
+              print(f"::notice::Resuming month {month} – {summary['stores']} checkpointed stores at {checkpoint.dir}")
+          else:
+              print(f"No checkpoint for {month} and this profile configuration – fresh run")
+          PY
 
       - name: Scrape, normalise, enrich, persist
         id: run
         env:
           HETZNER_INFERENCE_TOKEN: ${{ secrets.HETZNER_INFERENCE_TOKEN }}
-          EGMARKET_PROXY_URL: ${{ secrets.EGMARKET_PROXY_URL }} # optional: stores that block DC IPs
+          BORDA_PROXY_URL: ${{ secrets.BORDA_PROXY_URL }} # optional: stores that block DC IPs
           HF_HUB_CACHE: ${{ github.workspace }}/.cache/hf
-          EGMARKET_AI_ENABLED: ${{ inputs.ai == false && 'false' || 'true' }}
+          BORDA_AI_ENABLED: ${{ inputs.ai == false && 'false' || 'true' }}
         run: |
           set -o pipefail
           args=()
@@ -92,7 +101,7 @@ jobs:
           [ -n "${{ inputs.max_pages }}" ] && args+=(--max-pages "${{ inputs.max_pages }}")
           [ "${{ inputs.fresh }}" = "true" ] && args+=(--fresh)
           # one stream: phase groups, progress and ::annotations:: in order; copy kept as run.log
-          uv run egmarket run "${args[@]}" --out diagnostics/run-summary.json 2>&1 | tee diagnostics/run.log
+          uv run borda run "${args[@]}" --out diagnostics/run-summary.json 2>&1 | tee diagnostics/run.log
           echo "run_id=$(python3 -c 'import json;print(json.load(open("diagnostics/run-summary.json"))["run_id"])')" >> "$GITHUB_OUTPUT"
 
       - name: Save checkpoints, page cache, embedding model
@@ -106,7 +115,7 @@ jobs:
         if: always()
         run: |
           {
-            echo "## Market scrape ${{ steps.run.outputs.run_id }}"
+            echo "## Borda scrape ${{ steps.run.outputs.run_id }}"
             echo
             if [ ! -f diagnostics/latest.json ]; then echo "run did not produce diagnostics – see run.log artifact"; exit 0; fi
             echo '| store | status | offers | pages | error |'
@@ -141,8 +150,8 @@ jobs:
       - name: Commit data + diagnostics
         if: success()
         run: |
-          git config user.name "market-bot"
-          git config user.email "market-bot@users.noreply.github.com"
+          git config user.name "borda-bot"
+          git config user.email "borda-bot@users.noreply.github.com"
           rm -f diagnostics/run.log diagnostics/run-summary.json   # kept as artifact, not in git
           git add data diagnostics
           if git diff --cached --quiet; then

@@ -11,14 +11,14 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 
 IN_ACTIONS = os.environ.get("GITHUB_ACTIONS") == "true"
-log = logging.getLogger("egmarket")
+log = logging.getLogger("borda")
 
 
 class AnnotationHandler(logging.Handler):
-    """Mirror egmarket warnings/errors as GitHub workflow annotations (stdout commands)."""
+    """Mirror borda warnings/errors as GitHub workflow annotations (stdout commands)."""
 
     def emit(self, record: logging.LogRecord) -> None:
-        if not record.name.startswith("egmarket") or record.levelno < logging.WARNING:
+        if not record.name.startswith("borda") or record.levelno < logging.WARNING:
             return
         kind = "error" if record.levelno >= logging.ERROR else "warning"
         msg = record.getMessage().replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")

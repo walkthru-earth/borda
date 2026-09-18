@@ -23,6 +23,8 @@ from pydantic import (
     field_validator,
 )
 
+from .config import settings
+from .profiles import PublicProfile, default_profile
 from .taxonomy import Group
 
 Currency = Annotated[str, StringConstraints(to_upper=True, min_length=3, max_length=3)]
@@ -77,7 +79,7 @@ class RawOffer(Base):
     raw_name: Annotated[str, StringConstraints(min_length=2, max_length=300)]
     url: HttpUrl
     price: Price | None = None
-    currency: Currency = "EGP"
+    currency: Currency = Field(default_factory=lambda: settings.country_profile.currency)
     availability: Availability = Availability.UNKNOWN
     ts: datetime = Field(default_factory=utcnow)
     sku: str | None = None
@@ -160,7 +162,7 @@ class Product(Base):
     """Canonical, deduplicated product.
 
     `canonical_name`/`image` describe the *official* product; `raw_names` keeps every
-    Egyptian-market spelling (incl. Arabic) so local names remain searchable."""
+    local-market spelling (incl. Arabic) so local names remain searchable."""
 
     id: Slug
     canonical_name: str = Field(min_length=2, max_length=200)
@@ -277,7 +279,7 @@ class OfferRecord(Base):
     raw_name: str
     url: str
     price: Price | None = None
-    currency: Currency = "EGP"
+    currency: Currency = Field(default_factory=lambda: settings.country_profile.currency)
     availability: Availability = Availability.UNKNOWN
     sku: str | None = None
     category: str | None = None
@@ -330,6 +332,7 @@ class Manifest(Base):
     """Versioning metadata so diffs between runs are cheap to compute, plus per-file facts
     (size, footer, row groups) the frontend uses to plan range requests."""
 
+    profile: PublicProfile = Field(default_factory=lambda: default_profile().public())
     schema_version: int
     pipeline_version: str
     parquet_format: str

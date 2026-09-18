@@ -5,7 +5,7 @@
 	import { ArrowLeft, ArrowUpRight, Check, ChevronRight, FileText, Package, RefreshCw, Store, TrendingUp } from '@lucide/svelte';
 	import PriceChart from '$lib/PriceChart.svelte';
 	import { productOffers } from '$lib/offers';
-	import { locale, tr, formatNumber, dateLocale, groupName } from '$lib/i18n.svelte';
+	import { locale, tr, formatNumber, dateLocale, dateOptions, market, currencyName, groupName } from '$lib/i18n.svelte';
 	import ProductCard from '$lib/ProductCard.svelte';
 	import { catalog, fmtPrice, sellerName } from '$lib/data.svelte';
 	import { loadListings, loadProductDetail, loadSeries, resolveRedirect, type Listing, type Point, type ProductDetail } from '$lib/parquet';
@@ -56,9 +56,9 @@
 	const validUrl = (url: string | null | undefined): string | null => {
 		try { const parsed = new URL(url ?? ''); return ['https:', 'http:'].includes(parsed.protocol) ? parsed.href : null; } catch { return null; }
 	};
-	const date = (value: Date) => value.toLocaleDateString(dateLocale(), { day: 'numeric', month: 'short', year: 'numeric' });
+	const date = (value: Date) => value.toLocaleDateString(dateLocale(), { ...dateOptions(), day: 'numeric', month: 'short', year: 'numeric' });
 	const availability = (value: string) => ({ in_stock: tr("In stock", "متوفر"), out_of_stock: tr("Out of stock", "غير متوفر"), preorder: tr("Preorder", "طلب مسبق"), unknown: tr("Stock unconfirmed", "التوفر غير مؤكد") }[value] ?? tr("Stock unconfirmed", "التوفر غير مؤكد"));
-	let offerSummary = $derived(productOffers(stats, points));
+	let offerSummary = $derived(productOffers(stats, points, market.profile.currency));
 	let latestOffers = $derived(offerSummary.offers);
 	let currency = $derived(offerSummary.currency);
 	let bestOffer = $derived(offerSummary.bestOffer);
@@ -77,7 +77,7 @@
 	const linkLabel = (url: string) => { try { const parsed = new URL(url); return parsed.hostname.replace(/^www\./, '') + (parsed.pathname.toLowerCase().endsWith('.pdf') ? ' · PDF' : tr(' · Reference', ' · مرجع')); } catch { return url; } };
 </script>
 
-<svelte:head><title>{productName ?? tr('Product', 'منتج')} · Borda | بوردة</title><meta name="description" content={tr(`Compare seller prices, availability and price history for ${productName ?? 'electronics components'} in Egypt.`, `قارن أسعار البائعين والتوفر وسجل أسعار ${productName ?? 'المكونات الإلكترونية'} في مصر.`)} /></svelte:head>
+<svelte:head><title>{productName ?? tr('Product', 'منتج')} · Borda | بوردة</title><meta name="description" content={tr(`Compare seller prices, availability and price history for ${productName ?? 'electronics components'} in ${market.profile.country_name}.`, `قارن أسعار البائعين والتوفر وسجل أسعار ${productName ?? 'المكونات الإلكترونية'} في ${market.profile.country_name_ar}.`)} /></svelte:head>
 
 <nav class="crumbs" aria-label={tr('Breadcrumb', 'مسار التنقل')}><a href="{base}/"><ArrowLeft size={15} /> {tr("All components", "كل المكونات")}</a>{#if product}<ChevronRight size={14} /><a href="{base}/?group={encodeURIComponent(product.group ?? 'other')}">{groupName(product.group)}</a>{/if}</nav>
 
@@ -91,7 +91,7 @@
 	<article class="hero panel">
 		<div class="media">{#if validUrl(product.image) && !imageFailed}<img src={product.image!} alt={productName} onerror={() => imageFailed = true} />{:else}<Package size={70} strokeWidth={1} />{/if}<span class="category">{groupName(product.group)}</span></div>
 		<div class="info"><div class="eyebrow">{product.brand ?? tr("Component spotlight", "تعرف على المكون")}</div><h1 dir="auto">{productName}</h1>{#if locale.language === 'ar' && product.canonical_name_ar}<p class="original-name" dir="ltr">{product.canonical_name}</p>{/if}
-			{#if description}<p class="desc" dir="auto">{description}</p>{:else if loadingDetail}<div class="skeleton" style="height: 3em"></div>{:else}<p class="desc">{tr("Compare this component across Egyptian electronics stores and explore its recorded price history.", "قارن هذا المكون بين متاجر الإلكترونيات المصرية وتابع سجل أسعاره.")}</p>{/if}
+			{#if description}<p class="desc" dir="auto">{description}</p>{:else if loadingDetail}<div class="skeleton" style="height: 3em"></div>{:else}<p class="desc">{tr(`Compare this component across electronics stores in ${market.profile.country_name} and explore its recorded price history.`, `قارن هذا المكون بين متاجر الإلكترونيات في ${market.profile.country_name_ar} وتابع سجل أسعاره.`)}</p>{/if}
 			<div class="product-meta"><span><Store size={15} /> {formatNumber(product.sellers.length)} {product.sellers.length === 1 ? tr("seller", "بائع") : tr("sellers", "بائعين")}</span>{#if detail?.mpn}<span>{tr("Part no.", "رقم القطعة")} <strong dir="ltr">{detail.mpn}</strong></span>{/if}</div>
 			<div class="tags">{#each [...new Set(product.tags)] as tag (tag)}<a class="product-tag" href="{base}/?tag={encodeURIComponent(tag)}">{tag}</a>{/each}</div>
 			<div class="docs">{#if validUrl(detail?.datasheet_url)}<a class="doc-link" href={detail!.datasheet_url!} target="_blank" rel="noopener noreferrer nofollow"><FileText size={16} /> {tr("View datasheet", "ورقة البيانات")} <ArrowUpRight size={14} /></a>{:else if searchTerm}<a class="doc-link" href="https://www.alldatasheet.com/view.jsp?Searchword={encodeURIComponent(searchTerm)}" target="_blank" rel="noopener noreferrer nofollow"><FileText size={16} /> {tr("Find datasheet", "ابحث عن ورقة البيانات")} <ArrowUpRight size={14} /></a>{/if}</div>
@@ -99,7 +99,7 @@
 		<aside class="price-summary"><div class="eyebrow">{historicalOffers ? (bestOffer ? tr("Lowest recorded in-stock price", "أقل سعر مسجل عند التوفر") : tr("Lowest recorded price", "أقل سعر مسجل")) : bestOffer ? tr("Lowest in-stock price", "أقل سعر متوفر") : tr("Latest listed price", "آخر سعر مدرج")}</div>
 			{#if loadingOffers}<div class="skeleton" style="height: 40px"></div>{:else}<strong class="headline-price">{fmtPrice(bestOffer?.price ?? fallbackPrice, currency)}</strong>{/if}
 			{#if !loadingOffers && !offersUnavailable}<span class="stock-note" class:available={stockSellers > 0}>{#if stockSellers}<Check size={14} /> {historicalOffers ? tr("Previously in stock at", "كان متوفراً لدى") : tr("Reported in stock at", "متوفر حسب آخر رصد لدى")} {formatNumber(stockSellers)} {stockSellers === 1 ? tr("store", "متجر") : tr("stores", "متاجر")}{:else}{historicalOffers ? tr("No recorded in-stock offers", "لا توجد عروض متوفرة مسجلة") : tr("No confirmed in-stock offers", "لا توجد عروض مؤكدة التوفر")}{/if}</span>{/if}
-			<a class="compare-button" href="#offers">{tr("Compare seller offers", "قارن عروض البائعين")} <ArrowUpRight size={17} /></a><p>{tr(`Prices in ${currency}. Shipping may cost extra. Confirm price and stock with the seller.`, `الأسعار بعملة ${currency === 'EGP' ? 'الجنيه المصري' : currency}. قد تُضاف رسوم شحن. تأكد من السعر والتوفر مع البائع.`)}</p>
+			<a class="compare-button" href="#offers">{tr("Compare seller offers", "قارن عروض البائعين")} <ArrowUpRight size={17} /></a><p>{tr(`Prices in ${currency}. Shipping may cost extra. Confirm price and stock with the seller.`, `الأسعار بعملة ${currencyName(currency)}. قد تُضاف رسوم شحن. تأكد من السعر والتوفر مع البائع.`)}</p>
 			{#if bestOffer}<div class="last-seen">{historicalOffers ? tr("Historical offer recorded", "تاريخ رصد العرض") : tr("Best offer checked", "آخر تحقق من أفضل عرض")} {date(bestOffer.ts)}</div>{/if}
 		</aside>
 	</article>

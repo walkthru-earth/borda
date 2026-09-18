@@ -6,10 +6,10 @@ import httpx
 import pytest
 import respx
 
-from egmarket.http import Fetcher
-from egmarket.models import Availability, ScrapeStatus
-from egmarket.scrapers import BY_SLUG, PLATFORMS, Store, build_scraper
-from egmarket.scrapers.stores import STORES
+from borda.http import Fetcher
+from borda.models import Availability, ScrapeStatus
+from borda.scrapers import BY_SLUG, PLATFORMS, Store, build_scraper
+from borda.scrapers.stores import STORES
 
 
 @pytest.fixture

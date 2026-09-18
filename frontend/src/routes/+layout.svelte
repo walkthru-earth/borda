@@ -3,7 +3,7 @@
  import '@fontsource/cairo/600.css';
  import '@fontsource/cairo/700.css';
  import '../app.css';
- import { locale, tr, dateLocale } from '$lib/i18n.svelte';
+ import { locale, tr, dateLocale, dateOptions, market } from '$lib/i18n.svelte';
  import { base } from '$app/paths';
  import { page } from '$app/state';
  import { goto } from '$app/navigation';
@@ -24,9 +24,12 @@
   const chosen = queryLanguage ?? saved;
   if (chosen === 'ar' || chosen === 'en') locale.language = chosen;
  });
+ $effect(() => { if (!market.profile.languages.includes(locale.language)) locale.language = market.profile.languages.includes('en') ? 'en' : 'ar'; });
  $effect(() => { document.documentElement.lang = locale.language; document.documentElement.dir = locale.language === 'ar' ? 'rtl' : 'ltr'; });
  function toggleLanguage() {
-  locale.language = locale.language === 'en' ? 'ar' : 'en';
+  const nextLanguage = locale.language === 'en' ? 'ar' : 'en';
+  if (!market.profile.languages.includes(nextLanguage)) return;
+  locale.language = nextLanguage;
   try { localStorage.setItem('borda-language', locale.language); } catch { /* Preference still lasts this session. */ }
   const url = new URL(page.url); url.searchParams.set('lang', locale.language);
   void goto(`${url.pathname}${url.search}`, { replaceState:true, keepFocus:true, noScroll:true });
@@ -35,9 +38,9 @@
  let seoProduct = $derived(catalog.byId.get(page.params.id ?? ''));
  let canonical = $derived(`${SITE_ORIGIN}${`${page.url.pathname.replace(/\/$/, '')}/`}`);
  let filtered = $derived([...page.url.searchParams.keys()].some(key => key !== 'lang'));
- let seoTitle = $derived(seoProduct ? `${seoProduct.canonical_name} · Borda | بوردة` : tr('Borda — Electronic components in Egypt','بوردة — مكونات الإلكترونيات في مصر'));
- let seoDescription = $derived(seoProduct ? tr(`Compare ${seoProduct.canonical_name} prices and recorded availability across Egyptian electronics stores. Explore specifications, seller links and price history on Borda.`,`قارن أسعار ${seoProduct.canonical_name_ar || seoProduct.canonical_name} وتوفرها المسجل في محلات مصر. مواصفات وروابط المحلات وتاريخ الأسعار على بوردة.`) : tr('Find electronic components across Egyptian stores. Compare listed prices, browse stock observations, and search parts in English or Arabic.','دور على مكونات الإلكترونيات في محلات مصر. قارن الأسعار المسجلة والتوفر وابحث عن القطع بالعربي أو الإنجليزي.'));
- let structuredData = $derived(seoProduct ? productSchema(seoProduct,catalog.stats.get(seoProduct.id),canonical) : { '@context':'https://schema.org', '@type':'WebSite', name:'Borda | بوردة', url:`${SITE_ORIGIN}${base}/`, inLanguage:['en','ar'], description:seoDescription });
+ let seoTitle = $derived(seoProduct ? `${seoProduct.canonical_name} · Borda | بوردة` : tr(`Borda — Electronic components in ${market.profile.country_name}`,`بوردة — مكونات الإلكترونيات في ${market.profile.country_name_ar}`));
+ let seoDescription = $derived(seoProduct ? tr(`Compare ${seoProduct.canonical_name} prices and recorded availability across electronics stores in ${market.profile.country_name}. Explore specifications, seller links and price history on Borda.`,`قارن أسعار ${seoProduct.canonical_name_ar || seoProduct.canonical_name} وتوفرها المسجل في محلات ${market.profile.country_name_ar}. مواصفات وروابط المحلات وتاريخ الأسعار على بوردة.`) : tr(`Find electronic components across stores in ${market.profile.country_name}. Compare listed prices, browse stock observations, and search parts in English or Arabic.`,`دور على مكونات الإلكترونيات في محلات ${market.profile.country_name_ar}. قارن الأسعار المسجلة والتوفر وابحث عن القطع بالعربي أو الإنجليزي.`));
+ let structuredData = $derived(seoProduct ? productSchema(seoProduct,catalog.stats.get(seoProduct.id),canonical,market.profile) : { '@context':'https://schema.org', '@type':'WebSite', name:'Borda | بوردة', url:`${SITE_ORIGIN}${base}/`, inLanguage:market.profile.languages, description:seoDescription });
  let q = $derived(page.url.searchParams.get('q') ?? '');
  let draft = $state('');
  $effect(() => { draft = q; });
@@ -70,7 +73,7 @@
  <meta property="og:title" content={seoTitle} />
  <meta property="og:description" content={seoDescription} />
  <meta property="og:url" content={canonical} />
- <meta property="og:locale" content={locale.language === 'ar' ? 'ar_EG' : 'en_GB'} />
+ <meta property="og:locale" content={dateLocale().replace(/-/g, '_')} />
  <meta property="og:image" content={seoProduct?.image && /^https?:\/\//i.test(seoProduct.image) ? seoProduct.image : `${SITE_ORIGIN}${base}/brand/borda-social.png`} />
  <meta property="og:image:alt" content={seoProduct?.canonical_name ?? 'Borda | بوردة — قطعتك فين؟'} />
  <meta name="twitter:card" content="summary_large_image" />
@@ -87,7 +90,7 @@
    <input bind:this={input} bind:value={draft} type="search" enterkeyhint="search" autocomplete="off" aria-label={tr('Search components','ابحث عن المكونات')} dir="auto" placeholder={tr('Search a component, part number, or اسم القطعة…','ابحث باسم القطعة أو رقمها… ESP32، أردوينو، حساس')} oninput={(e) => submit(e.currentTarget.value)} />
    {#if draft}<button type="button" aria-label={tr('Clear search','امسح البحث')} onclick={() => { draft = ''; submit('', true); input.focus(); }}><X size={17}/></button>{:else}<kbd>/</kbd>{/if}
   </form>
-  <button class="language-switch" onclick={toggleLanguage} aria-label={tr("Switch to Arabic", "Switch to English")}><Languages size={16}/><span>{tr("العربية", "English")}</span></button>
+  {#if market.profile.languages.length > 1}<button class="language-switch" onclick={toggleLanguage} aria-label={tr("Switch to Arabic", "Switch to English")}><Languages size={16}/><span>{tr("العربية", "English")}</span></button>{/if}
   <a class="source" href="https://github.com/walkthru-earth/borda" target="_blank" rel="noopener"><CodeXml size={18}/><span>{tr('Open source','مفتوح المصدر')}</span><ArrowUpRight size={14}/></a>
  </div>
 </header>
@@ -97,7 +100,7 @@
 </main>
 <footer class="container footer">
  <div><strong>{tr('Made for the makers.','معاك في كل مشروع.')}</strong><p>{tr('Find your next component. Bring your next idea to life.','لاقي القطعة اللي محتاجها، وحوّل فكرتك لحقيقة.')}</p></div>
- <div class="foot-meta">{#if catalog.manifest}<span>{tr('Data updated','آخر تحديث')} {new Date(catalog.manifest.generated_at).toLocaleDateString(dateLocale(), { day:'numeric',month:'short',year:'numeric' })}</span>{/if}<span>{tr('Prices are observations. Confirm price and availability with the seller.','الأسعار حسب آخر رصد. راجع السعر والتوفر مع المحل قبل الشراء.')}</span></div>
+ <div class="foot-meta">{#if catalog.manifest}<span>{tr('Data updated','آخر تحديث')} {new Date(catalog.manifest.generated_at).toLocaleDateString(dateLocale(), { ...dateOptions(), day:'numeric',month:'short',year:'numeric' })}</span>{/if}<span>{tr('Prices are observations. Confirm price and availability with the seller.','الأسعار حسب آخر رصد. راجع السعر والتوفر مع المحل قبل الشراء.')}</span></div>
 </footer>
 <style>
  .language-switch { display:flex; align-items:center; gap:7px; font-size:12px; white-space:nowrap; font-weight:600; color:var(--accent); }.bar { gap:26px!important; }

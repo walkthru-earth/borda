@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from pydantic_ai import models
 
-from egmarket.models import Availability, RawOffer
+from borda.models import Availability, RawOffer
 
 models.ALLOW_MODEL_REQUESTS = False  # never hit a real LLM from tests
 
