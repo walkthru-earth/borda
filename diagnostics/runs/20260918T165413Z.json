@@ -1,0 +1,160 @@
+{
+ "run_id": "20260918T165413Z",
+ "ts": "2026-09-18T16:54:13+00:00",
+ "duration_s": 2933.2,
+ "stores": [
+  {
+   "seller": "fut-electronics",
+   "status": "ok",
+   "offers": 1241,
+   "pages": 5,
+   "duration_s": 3.9,
+   "warnings": [
+    "fut-electronics: dropped listing 'Local Delivery': Input should be greater than 0"
+   ]
+  },
+  {
+   "seller": "devboardsmarket",
+   "status": "ok",
+   "offers": 50,
+   "pages": 1,
+   "duration_s": 0.5,
+   "warnings": []
+  },
+  {
+   "seller": "circuits-elec",
+   "status": "partial",
+   "offers": 1000,
+   "pages": 4,
+   "duration_s": 15.3,
+   "error": "FetchError: giving up on https://circuits-elec.com/products.json: HTTP 429 for https://circuits-elec.com/products.json?limit=250&page=5",
+   "warnings": []
+  },
+  {
+   "seller": "uge-one",
+   "status": "ok",
+   "offers": 5858,
+   "pages": 59,
+   "duration_s": 131.2,
+   "warnings": [
+    "uge-one: dropped listing 'C': String should have at least 2 characters"
+   ]
+  },
+  {
+   "seller": "microohm",
+   "status": "failed",
+   "offers": 0,
+   "pages": 0,
+   "duration_s": 10.7,
+   "error": "FetchError: giving up on https://microohm-eg.com/wp-json/wc/store/v1/products: HTTP 403 for https://microohm-eg.com/wp-json/wc/store/v1/products?per_page=100&page=1&orderby=id",
+   "warnings": []
+  },
+  {
+   "seller": "makerselectronics",
+   "status": "ok",
+   "offers": 8789,
+   "pages": 88,
+   "duration_s": 326.0,
+   "warnings": []
+  },
+  {
+   "seller": "mostelectronic",
+   "status": "ok",
+   "offers": 1525,
+   "pages": 16,
+   "duration_s": 36.3,
+   "warnings": []
+  },
+  {
+   "seller": "fares-pcb",
+   "status": "ok",
+   "offers": 246,
+   "pages": 3,
+   "duration_s": 5.6,
+   "warnings": []
+  },
+  {
+   "seller": "ic-hat",
+   "status": "failed",
+   "offers": 0,
+   "pages": 0,
+   "duration_s": 10.7,
+   "error": "FetchError: giving up on https://ic-hat.com/en/2-home: HTTP 403 for https://ic-hat.com/en/2-home?page=1&from-xhr=",
+   "warnings": []
+  },
+  {
+   "seller": "ram-e-shop",
+   "status": "ok",
+   "offers": 2879,
+   "pages": 16,
+   "duration_s": 25.4,
+   "warnings": []
+  },
+  {
+   "seller": "easytest",
+   "status": "ok",
+   "offers": 51,
+   "pages": 7,
+   "duration_s": 7.4,
+   "warnings": []
+  },
+  {
+   "seller": "maamoon",
+   "status": "ok",
+   "offers": 1323,
+   "pages": 6,
+   "duration_s": 3.7,
+   "warnings": []
+  },
+  {
+   "seller": "eshopmas",
+   "status": "skipped",
+   "offers": 0,
+   "pages": 0,
+   "duration_s": 0.0,
+   "error": "Cloudflare challenge blocks both HTML and the Store API from CI runners.",
+   "warnings": []
+  },
+  {
+   "seller": "rsdelivers",
+   "status": "skipped",
+   "offers": 0,
+   "pages": 0,
+   "duration_s": 0.0,
+   "error": "Prices are rendered client-side (JSON-LD reports 0); catalog is >100k SKUs.",
+   "warnings": []
+  },
+  {
+   "seller": "amazon-eg",
+   "status": "skipped",
+   "offers": 0,
+   "pages": 0,
+   "duration_s": 0.0,
+   "error": "Optional per brief; requires anti-bot handling – out of scope for now.",
+   "warnings": []
+  }
+ ],
+ "offers_scraped": 22962,
+ "offers_kept": 22962,
+ "products_total": 20497,
+ "products_new": 20497,
+ "flags": {
+  "outlier_high": 11,
+  "missing_price": 23,
+  "outlier_low": 14,
+  "implausible_price": 1
+ },
+ "enrichment": {
+  "requested": 1500,
+  "enriched": 1500,
+  "cached": 0,
+  "merged": 103,
+  "batches": 50,
+  "failed_batches": 0,
+  "error": null
+ },
+ "errors": [
+  "microohm: FetchError: giving up on https://microohm-eg.com/wp-json/wc/store/v1/products: HTTP 403 for https://microohm-eg.com/wp-json/wc/store/v1/products?per_page=100&page=1&orderby=id",
+  "ic-hat: FetchError: giving up on https://ic-hat.com/en/2-home: HTTP 403 for https://ic-hat.com/en/2-home?page=1&from-xhr="
+ ]
+}
