@@ -81,7 +81,7 @@ STORES: list[Store] = [
         name="Maamoon Est.",
         base_url="https://www.maamoon.com",
         platform="wix",
-        params={"max_products": 1500},
+        note="Storefront GraphQL (anonymous instance token); sitemap+JSON-LD fallback.",
     ),
     Store(
         slug="eshopmas",

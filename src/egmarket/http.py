@@ -122,6 +122,30 @@ class Fetcher:
                 await asyncio.sleep(backoff)
         raise FetchError(f"giving up on {url}: {last_exc}") from last_exc
 
+    async def post_json(
+        self, url: str, payload: Any, *, headers: dict[str, str] | None = None
+    ) -> Any:
+        """POST a JSON body (throttled + retried, never cached) and decode the JSON reply."""
+        host = httpx.URL(url).host
+        last_exc: Exception | None = None
+        for attempt in range(self.retries + 1):
+            await self._throttle(host)
+            try:
+                self.requests += 1
+                r = await self.client.post(url, json=payload, headers=headers)
+                if r.status_code in (403, 429, 500, 502, 503, 504):
+                    raise FetchError(f"HTTP {r.status_code} for {r.url}")
+                r.raise_for_status()
+                return r.json()
+            except (httpx.HTTPError, FetchError, json.JSONDecodeError) as exc:
+                last_exc = exc
+                if attempt == self.retries:
+                    break
+                backoff = min(2**attempt * 1.5, 20)
+                log.warning("post %s failed (%s), retry in %.1fs", url, exc, backoff)
+                await asyncio.sleep(backoff)
+        raise FetchError(f"giving up on {url}: {last_exc}") from last_exc
+
     async def json(self, url: str, **kw: Any) -> Any:
         body = await self.text(url, **kw)
         try:

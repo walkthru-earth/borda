@@ -135,13 +135,75 @@ async def test_odoo_html_cards(fetcher):
 
 
 @respx.mock
-async def test_wix_sitemap_and_jsonld(fetcher):
+async def test_wix_storefront_graphql_api(fetcher):
+    store = Store(slug="wix", name="Wix", base_url="https://wix.test", platform="wix")
+    respx.get("https://wix.test/_api/v2/dynamicmodel").mock(
+        return_value=httpx.Response(
+            200, json={"apps": {"1380b703-ce81-ff05-f115-39571d94dfcd": {"instance": "tok"}}}
+        )
+    )
+    gql = respx.post(
+        "https://wix.test/_api/wix-ecommerce-storefront-web/api", headers={"Authorization": "tok"}
+    )
+    gql.side_effect = [
+        httpx.Response(
+            200,
+            json={
+                "data": {
+                    "catalog": {
+                        "category": {
+                            "productsWithMetaData": {
+                                "totalCount": 2,
+                                "list": [
+                                    {
+                                        "name": "5V Relay Module",
+                                        "urlPart": "relay",
+                                        "sku": "R5",
+                                        "price": 80.0,
+                                        "discountedPrice": 65.0,
+                                        "isInStock": True,
+                                        "inventory": {"status": "in_stock"},
+                                        "brand": None,
+                                        "ribbon": "Sale",
+                                        "media": [{"fullUrl": "https://static.wix.test/r.jpg"}],
+                                    },
+                                    {
+                                        "name": "LDR",
+                                        "urlPart": "ldr",
+                                        "price": 5.0,
+                                        "discountedPrice": 5.0,
+                                        "isInStock": False,
+                                        "inventory": {"status": "out_of_stock"},
+                                        "media": [],
+                                    },
+                                ],
+                            }
+                        }
+                    }
+                }
+            },
+        ),
+    ]
+    offers, report = await build_scraper(store, fetcher, max_pages=5).run()
+    assert report.status == ScrapeStatus.OK and len(offers) == 2 and report.pages == 1
+    assert str(offers[0].price) == "65.00" and offers[0].extra == {"ribbon": "Sale"}
+    assert str(offers[0].url) == "https://wix.test/product-page/relay"
+    assert str(offers[0].image) == "https://static.wix.test/r.jpg"
+    assert offers[1].availability == Availability.OUT_OF_STOCK
+    assert gql.call_count == 1  # 2 of 2 products fetched -> no second page
+
+
+@respx.mock
+async def test_wix_falls_back_to_sitemap_and_jsonld(fetcher):
     store = Store(
         slug="wix",
         name="Wix",
         base_url="https://wix.test",
         platform="wix",
         params={"max_products": 10},
+    )
+    respx.get("https://wix.test/_api/v2/dynamicmodel").mock(
+        return_value=httpx.Response(200, json={"apps": {}})
     )
     respx.get("https://wix.test/store-products-sitemap.xml").mock(
         return_value=httpx.Response(
@@ -167,6 +229,7 @@ async def test_wix_sitemap_and_jsonld(fetcher):
     )
     offers, report = await build_scraper(store, fetcher, max_pages=5).run()
     assert report.status == ScrapeStatus.OK and len(offers) == 1
+    assert any("fallback" in w for w in report.warnings)
     assert str(offers[0].image) == "https://static.wix.test/r.jpg"
     assert str(offers[0].price) == "65.00"
 

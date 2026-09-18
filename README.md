@@ -17,12 +17,18 @@ scrape (per-store, fail-safe) ─▶ normalize + dedupe ─▶ Pydantic AI enric
 | fut-electronics, devboardsmarket, circuits-elec | Shopify | `/products.json` | on |
 | uge-one, microohm, makerselectronics, mostelectronic, fares-pcb | WooCommerce | Store API `/wp-json/wc/store/v1/products` | on |
 | ic-hat | PrestaShop | XHR JSON listing | on |
-| ram-e-shop | Odoo | HTML cards (schema.org microdata) | on |
+| ram-e-shop | Odoo 17 | HTML cards (schema.org microdata), `?ppg=200` → ~16 pages | on |
 | easytest | custom | HTML `data-et-*` attributes | on |
-| maamoon | Wix | product sitemap + JSON-LD | on (capped) |
+| maamoon | Wix | anonymous storefront GraphQL (`/_api/wix-ecommerce-storefront-web/api`, 250/page); sitemap + JSON-LD fallback | on |
 | eshopmas | WooCommerce | – | off: Cloudflare challenge |
 | rsdelivers | Next.js | – | off: prices rendered client-side, >100k SKUs |
 | amazon-eg | – | – | off: optional per brief, anti-bot |
+
+**Why no official SDKs?** Shopify's Admin/Storefront APIs, Wix's REST API and Odoo's JSON-RPC all
+need merchant-issued credentials; libraries such as `ShopifyAPI`, `wix-python-sdk` or `odoorpc`
+wrap those. For third-party price tracking the anonymous surfaces above are the only ones
+available, and they are JSON where it matters (Shopify `/products.json`, WooCommerce Store API,
+PrestaShop XHR, Wix storefront GraphQL) – Odoo and EasyTest are the only HTML parsers left.
 
 Add a store: append a `Store(...)` in `src/egmarket/scrapers/stores.py`. Add a platform:
 subclass `BaseScraper` (yield `RawOffer`) and register it in `scrapers/__init__.py`.

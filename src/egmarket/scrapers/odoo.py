@@ -1,4 +1,8 @@
-"""Odoo eCommerce (`/shop/page/N`) – product cards carry schema.org microdata."""
+"""Odoo eCommerce (`/shop/page/N?ppg=200`) – product cards carry schema.org microdata.
+
+Odoo 17's website_sale accepts `ppg` (products per page) from the query string, so a 3k
+catalogue is ~16 pages instead of ~100. There is no anonymous JSON API for the catalogue
+(JSON-RPC needs a login), so HTML it stays."""
 
 from __future__ import annotations
 
@@ -16,8 +20,9 @@ class OdooScraper(BaseScraper):
 
     async def iter_offers(self) -> AsyncIterator[RawOffer]:
         seen: set[str] = set()
+        ppg = int(self.store.params.get("ppg", 200))
         for page in range(1, self.max_pages + 1):
-            html = await self.fetch.text(f"{self.base}/shop/page/{page}")
+            html = await self.fetch.text(f"{self.base}/shop/page/{page}", params={"ppg": ppg})
             tree = HTMLParser(html)
             cards = tree.css(".oe_product")  # <td> or <div> depending on theme
             if not cards:
