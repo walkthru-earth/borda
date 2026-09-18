@@ -54,8 +54,12 @@ export interface Product {
 }
 export interface ProductDetail extends Product {
 	description: string | null;
+	specs: string[];
+	mpn: string | null;
+	datasheet_url: string | null;
 	listings: Record<string, string>;
 }
+export interface Listing { product_id: string; listing_key: string; seller: string; url: string; raw_name: string; description: string | null; links: string[] }
 export interface Stats {
 	product_id: string;
 	currency: string;
@@ -137,7 +141,7 @@ export function loadCatalog(): Promise<Product[]> {
 
 export async function loadProductDetail(id: string): Promise<ProductDetail | null> {
 	const rows = await readWhole<Omit<ProductDetail, 'listings'> & { listings: string }>(
-		'catalog.parquet', [...LIST_COLUMNS, 'description', 'listings'], { id: { $eq: id } }
+		'catalog.parquet', [...LIST_COLUMNS, 'description', 'specs', 'mpn', 'datasheet_url', 'listings'], { id: { $eq: id } }
 	);
 	const r = rows[0];
 	return r ? { ...r, listings: JSON.parse(r.listings || '{}') as Record<string, string> } : null;
@@ -158,6 +162,16 @@ export async function loadSeries(ids: string[]): Promise<Point[]> {
 		return rows.sort((a, b) => +a.ts - +b.ts);
 	} catch (e) {
 		console.warn('series unavailable', e);
+		return [];
+	}
+}
+
+/** Seller descriptions + documentation links for one product (pruned range reads). */
+export async function loadListings(productId: string): Promise<Listing[]> {
+	try {
+		const { file, metadata } = await remote('listings.parquet');
+		return (await parquetReadObjects({ file, metadata, compressors, filter: { product_id: { $eq: productId } }, useBloomFilters: true })) as Listing[];
+	} catch {
 		return [];
 	}
 }

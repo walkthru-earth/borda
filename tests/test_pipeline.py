@@ -26,6 +26,9 @@ def _mock_stores(uno_price_b: str):
                         "title": "Arduino UNO R3 (original)",
                         "handle": "uno",
                         "variants": [{"price": "450.00", "available": True}],
+                        "body_html": "<p>The classic <b>ATmega328P</b> board. "
+                        "<a href='/files/uno_datasheet.pdf'>Datasheet</a> "
+                        "<a href='https://facebook.com/x'>fb</a></p>",
                     },
                     {
                         "title": "HC-SR04 Ultrasonic",
@@ -114,6 +117,14 @@ async def test_two_runs_build_history_and_exports(tmp_path, monkeypatch):
     cat = store.read_catalog()
     uno = cat.products["arduino-uno-r3"]
     assert uno.sellers == ["shop-a", "shop-b"] and "اردوينو اونو R3 CH340" in uno.raw_names
+
+    assert str(uno.datasheet_url) == "https://a.test/files/uno_datasheet.pdf"
+    listings = pq.read_table(data / "listings.parquet").to_pylist()
+    row = next(
+        r for r in listings if r["seller"] == "shop-a" and r["product_id"] == "arduino-uno-r3"
+    )
+    assert row["description"] == "The classic ATmega328P board. Datasheet fb"
+    assert row["links"] == ["https://a.test/files/uno_datasheet.pdf"]
 
     stats = pq.read_table(data / "stats.parquet").to_pylist()
     s = next(r for r in stats if r["product_id"] == "arduino-uno-r3")

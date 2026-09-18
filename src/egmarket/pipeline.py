@@ -13,6 +13,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field
 
@@ -125,6 +126,45 @@ async def scrape_all(
     return offers, [r for _, r in results], resumed
 
 
+def update_listings(
+    existing: dict[str, dict],
+    offers: list[RawOffer],
+    records: list[OfferRecord],
+    catalog: Catalog,
+) -> dict[str, dict]:
+    """Merge this run's seller descriptions/links into the listings table (latest text wins,
+    earlier text is kept for listings not seen this run)."""
+    pid_by_listing = {f"{r.seller}:{urlparse(r.url).path}": r.product_id for r in records}
+    for o in offers:
+        pid = pid_by_listing.get(o.listing_key)
+        if pid is None:
+            continue
+        prev = existing.get(o.listing_key, {})
+        existing[o.listing_key] = {
+            "product_id": pid,
+            "listing_key": o.listing_key,
+            "seller": o.seller,
+            "url": str(o.url),
+            "raw_name": o.raw_name,
+            "description": o.description or prev.get("description"),
+            "links": o.links or prev.get("links") or [],
+        }
+    # follow merges for listings from earlier runs
+    for row in existing.values():
+        row["product_id"] = catalog.resolve_id(row["product_id"])
+    return {k: r for k, r in existing.items() if r["product_id"] in catalog.products}
+
+
+def best_descriptions(listings: dict[str, dict]) -> dict[str, str]:
+    """product id -> longest seller description (context for the LLM)."""
+    best: dict[str, str] = {}
+    for r in listings.values():
+        d = r.get("description")
+        if d and len(d) > len(best.get(r["product_id"], "")):
+            best[r["product_id"]] = d
+    return best
+
+
 def dedupe_offers(offers: list[RawOffer], catalog: Catalog) -> tuple[list[OfferRecord], int]:
     """Stable order (seller, url) so ids are deterministic; one record per listing."""
     new_products = 0
@@ -199,14 +239,20 @@ async def run_pipeline(opts: RunOptions) -> tuple[Diagnostics, int]:
             new_products,
             before,
         )
+        listings = update_listings(store.read_listings(), raw_offers, records, catalog)
+        log.info(
+            "listings: %d with text, %d with doc links",
+            sum(1 for r in listings.values() if r["description"]),
+            sum(1 for r in listings.values() if r["links"]),
+        )
 
     # 3. enrich (best effort, cache mirrored to the checkpoint) then follow merges
     enrich_report: EnrichReport | None = None
     if opts.ai and settings.ai_enabled and records and not opts.dry_run:
         with phase("Pydantic AI enrichment"):
-            enrich_report = await Enricher(store, mirror_path=ckpt.enrichment_path).enrich(
-                catalog, limit=opts.ai_limit
-            )
+            enrich_report = await Enricher(
+                store, mirror_path=ckpt.enrichment_path, descriptions=best_descriptions(listings)
+            ).enrich(catalog, limit=opts.ai_limit)
             log.info(
                 "enrichment: %s", {k: v for k, v in enrich_report.__dict__.items() if k != "merges"}
             )
@@ -214,6 +260,8 @@ async def run_pipeline(opts: RunOptions) -> tuple[Diagnostics, int]:
                 errors.append(f"enrichment: {enrich_report.error}")
             for r in records:
                 r.product_id = catalog.resolve_id(r.product_id)
+            for row in listings.values():
+                row["product_id"] = catalog.resolve_id(row["product_id"])
 
     # 4. validate / flag against recent history
     with phase("validate + flag outliers"):
@@ -278,9 +326,12 @@ async def run_pipeline(opts: RunOptions) -> tuple[Diagnostics, int]:
                 diag.errors.append(f"embeddings: {emb.error}")
 
     # 6. persist canonical history + catalog (Parquet)
-    with phase("persist history + catalog"):
+    with phase("persist history + catalog + listings"):
         store.write_run(run)
         store.write_catalog(catalog)
+        store.write_listings(
+            {k: r for k, r in listings.items() if r["product_id"] in catalog.products}
+        )
 
     # 7. derived exports rebuilt from the full history (merges/redirects apply retroactively)
     with phase("export series + stats + manifest"):

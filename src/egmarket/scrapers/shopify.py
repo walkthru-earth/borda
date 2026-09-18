@@ -6,6 +6,7 @@ from collections.abc import AsyncIterator
 
 from ..models import Availability, RawOffer
 from .base import BaseScraper
+from .docs import extract_doc_links
 
 
 class ShopifyScraper(BaseScraper):
@@ -44,6 +45,8 @@ class ShopifyScraper(BaseScraper):
                     category=p.get("product_type") or None,
                     store_tags=p.get("tags") or [],
                     image=(p.get("images") or [{}])[0].get("src"),
+                    description=p.get("body_html") or None,
+                    links=extract_doc_links(p.get("body_html"), url),
                     extra={"variant": v.get("title")} if multi else {},
                 )
                 if offer:

@@ -5,7 +5,7 @@
 	import ProductCard from '$lib/ProductCard.svelte';
 	import { catalog, fmtPrice, groupIcon, groupLabel, sellerName } from '$lib/data.svelte';
 	import { goto } from '$app/navigation';
-	import { loadProductDetail, loadSeries, resolveRedirect, type Point, type ProductDetail } from '$lib/parquet';
+	import { loadListings, loadProductDetail, loadSeries, resolveRedirect, type Listing, type Point, type ProductDetail } from '$lib/parquet';
 
 	let id = $derived(page.params.id ?? '');
 	let product = $derived(catalog.byId.get(id));
@@ -19,12 +19,14 @@
 	});
 
 	let detail = $state<ProductDetail | null>(null);
+	let listings = $state<Listing[]>([]);
 	let points = $state<Point[]>([]);
 	let loadingSeries = $state(true);
 	$effect(() => {
 		const pid = id;
-		detail = null; points = []; loadingSeries = true;
+		detail = null; points = []; listings = []; loadingSeries = true;
 		void loadProductDetail(pid).then((d) => { if (pid === id) detail = d; });
+		void loadListings(pid).then((l) => { if (pid === id) listings = l; });
 		void loadSeries([pid]).then((pts) => { if (pid === id) { points = pts; loadingSeries = false; } });
 	});
 
@@ -36,6 +38,11 @@
 	let similar = $derived((product?.similar ?? []).map((s) => catalog.byId.get(s)).filter((p) => !!p).slice(0, 8));
 	let aka = $derived((product?.raw_names ?? []).filter((n) => n.toLowerCase() !== product?.canonical_name.toLowerCase()));
 	let unpriced = $derived(Object.entries(detail?.listings ?? {}).filter(([k]) => !latestBySeller.some((o) => k.startsWith(o.seller + ':'))));
+	let specs = $derived((detail?.specs ?? []).map((s) => { const i = s.indexOf(':'); return i > 0 ? [s.slice(0, i).trim(), s.slice(i + 1).trim()] : ['', s]; }));
+	let docLinks = $derived([...new Set(listings.flatMap((l) => l.links ?? []))].filter((u) => u !== detail?.datasheet_url).slice(0, 8));
+	let sellerTexts = $derived(listings.filter((l) => l.description && l.description.length > 40).sort((a, b) => (b.description?.length ?? 0) - (a.description?.length ?? 0)));
+	let searchTerm = $derived(detail?.mpn ?? product?.canonical_name ?? '');
+	const linkLabel = (u: string) => { try { const url = new URL(u); const last = decodeURIComponent(url.pathname.split('/').filter(Boolean).pop() ?? ''); return `${url.hostname.replace(/^www\./, '')}${last ? ' · ' + last.slice(0, 40) : ''}`; } catch { return u; } };
 </script>
 
 <svelte:head><title>{product?.canonical_name ?? id} – price history · EG Maker Market</title></svelte:head>
@@ -57,6 +64,17 @@
 			<div class="muted small">{[product.brand, product.category].filter(Boolean).join(' · ')}</div>
 			<h1>{product.canonical_name}</h1>
 			{#if detail?.description}<p class="desc">{detail.description}</p>{:else if !detail}<div class="skeleton" style="height: 2.4em"></div>{/if}
+			{#if specs.length}
+				<dl class="specs">{#each specs as [k, v] (k + v)}<div><dt>{k}</dt><dd>{v}</dd></div>{/each}</dl>
+			{/if}
+			<div class="docs">
+				{#if detail?.datasheet_url}
+					<a class="btn primary" href={detail.datasheet_url} target="_blank" rel="noopener nofollow">📄 Datasheet ↗</a>
+				{:else if searchTerm}
+					<a class="btn" href="https://www.alldatasheet.com/view.jsp?Searchword={encodeURIComponent(searchTerm)}" target="_blank" rel="noopener nofollow">📄 Find datasheet{detail?.mpn ? ` · ${detail.mpn}` : ''} ↗</a>
+				{/if}
+				{#if detail?.mpn}<a class="btn" href="https://octopart.com/search?q={encodeURIComponent(detail.mpn)}" target="_blank" rel="noopener nofollow">🔎 {detail.mpn} on Octopart ↗</a>{/if}
+			</div>
 			<div class="tags">{#each product.tags as t (t)}<a class="chip ghost" href="{base}/?tag={t}">#{t}</a>{/each}</div>
 		</div>
 		<div class="stats">
@@ -96,6 +114,21 @@
 		</ul>
 	</section>
 
+	{#if docLinks.length || sellerTexts.length}
+		<section class="card pad">
+			<h2>From the sellers <span class="muted small">descriptions & documents on their pages</span></h2>
+			{#if docLinks.length}
+				<ul class="links">{#each docLinks as u (u)}<li><a href={u} target="_blank" rel="noopener nofollow">🔗 {linkLabel(u)}</a></li>{/each}</ul>
+			{/if}
+			{#each sellerTexts.slice(0, 4) as l (l.listing_key)}
+				<details class="seller-text">
+					<summary><strong>{sellerName(l.seller)}</strong> <span class="muted small" dir="auto">— {l.raw_name}</span></summary>
+					<p dir="auto">{l.description}</p>
+				</details>
+			{/each}
+		</section>
+	{/if}
+
 	{#if aka.length}
 		<section class="card pad">
 			<h2>Also sold as <span class="muted small">local & seller names</span></h2>
@@ -126,6 +159,16 @@
 	.info h1 { font-size: 1.35rem; margin: 0.1rem 0 0.5rem; }
 	.desc { margin: 0 0 0.6rem; }
 	.tags { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+	.specs { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 0.4rem; margin: 0 0 0.75rem; }
+	.specs div { background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 0.4rem 0.6rem; }
+	.specs dt { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+	.specs dd { margin: 0; font-weight: 600; font-size: 0.9rem; }
+	.docs { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 0.75rem; }
+	.links { list-style: none; margin: 0 0 0.5rem; padding: 0; display: flex; flex-wrap: wrap; gap: 0.4rem 1rem; font-size: 0.9rem; }
+	.links a { color: var(--accent); }
+	.seller-text { border-top: 1px solid var(--line); padding: 0.5rem 0; }
+	.seller-text summary { cursor: pointer; }
+	.seller-text p { white-space: pre-line; margin: 0.4rem 0 0; font-size: 0.9rem; max-height: 14em; overflow: auto; }
 	.stats { display: flex; flex-direction: column; gap: 0.6rem; }
 	.big { display: flex; flex-direction: column; gap: 0.2rem; padding: 0.75rem; border-radius: 12px; background: var(--accent-soft); }
 	.big strong { font-size: 1.6rem; font-variant-numeric: tabular-nums; }

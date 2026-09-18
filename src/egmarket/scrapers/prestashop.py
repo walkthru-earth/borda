@@ -8,6 +8,7 @@ from collections.abc import AsyncIterator
 
 from ..models import Availability, RawOffer
 from .base import BaseScraper
+from .docs import extract_doc_links
 
 _XHR = {"Accept": "application/json", "X-Requested-With": "XMLHttpRequest"}
 
@@ -41,6 +42,10 @@ class PrestaShopScraper(BaseScraper):
                     brand=p.get("manufacturer_name") or None,
                     category=p.get("category_name") or None,
                     image=((cover.get("large") or cover.get("medium") or {}).get("url")),
+                    description=p.get("description_short") or p.get("description") or None,
+                    links=extract_doc_links(
+                        (p.get("description") or "") + (p.get("description_short") or ""), p["url"]
+                    ),
                 )
                 if offer:
                     yield offer

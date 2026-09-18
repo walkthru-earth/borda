@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from rapidfuzz import fuzz
 
 from ..models import Product, RawOffer
+from ..scrapers.docs import rank_datasheet
 from . import names
 from .categories import assign_group
 from .tags import derive_tags
@@ -167,6 +168,12 @@ class Catalog:
             p.category = offer.category
         if not p.image and offer.image:
             p.image = offer.image
+        if offer.links and (
+            ds := rank_datasheet(
+                [*offer.links, *([str(p.datasheet_url)] if p.datasheet_url else [])]
+            )
+        ):
+            p.datasheet_url = ds
         if not p.enriched:
             p.tags = derive_tags(p, offer)
             p.group = assign_group(name=p.canonical_name, tags=p.tags, store_category=p.category)
@@ -183,6 +190,9 @@ class Catalog:
         keep.listings = {**drop.listings, **keep.listings}
         keep.description = keep.description or drop.description
         keep.image = keep.image or drop.image
+        keep.datasheet_url = keep.datasheet_url or drop.datasheet_url
+        keep.mpn = keep.mpn or drop.mpn
+        keep.specs = keep.specs or drop.specs
         keep.brand = keep.brand or drop.brand
         keep.category = keep.category or drop.category
         keep.enriched = keep.enriched or drop.enriched

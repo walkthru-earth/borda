@@ -39,11 +39,12 @@ subclass `BaseScraper` (yield `RawOffer`) and register it in `scrapers/__init__.
 |---|---|---|
 | `offers/year=YYYY/month=MM/<run_id>.parquet` | every observed listing: run_id, ts, product_id, seller, raw_name, url, price, currency, availability, sku, category, image, flags | append-only, hive partitioned, sorted by (product_id, seller) |
 | `store_runs/year=YYYY/month=MM/<run_id>.parquet` | scraper health per store per run | append-only |
-| `catalog.parquet` | products: id, canonical_name, **raw_names** (local/Arabic names), tags, description, brand, category, **group** (taxonomy), **image**, sellers, listings (JSON), **similar** (nearest neighbours), enriched | sorted by id, 2k-row groups, Bloom(id) |
+| `catalog.parquet` | products: id, canonical_name, **raw_names** (local/Arabic names), tags, description (2-3 sentences), **specs** ("Key: value"), **mpn**, **datasheet_url**, brand, category, **group** (taxonomy), **image**, sellers, listings (JSON), **similar** (nearest neighbours), enriched | sorted by id, 2k-row groups, Bloom(id) |
 | `series.parquet` | chart points (product_id, ts, seller, price, currency, availability, url) | sorted by (product_id, ts), 2k-row groups, Bloom(product_id) |
 | `stats.parquet` | per product min / max / median / latest_min / in_stock_sellers / observations / group | sorted by product_id |
 | `embeddings.parquet` | int8 MiniLM sentence vectors (384 B/product) + text hash | sorted by product_id |
 | `redirects.parquet` | merged / renamed id → surviving id (old URLs keep working) | sorted |
+| `listings.parquet` | per seller listing: plain-text **seller description** + **documentation links** found on the page (latest text, kept if the seller drops it) | sorted by product_id, Bloom |
 | `enrichment.parquet` | Pydantic AI cache (one LLM call per product, ever) | – |
 | `manifest.json` | versions, taxonomy counts, per-file **sha256 / bytes / footer size / rows / row groups**, per-run summaries + digests | – |
 | `diagnostics/latest.json`, `diagnostics/runs/*.json` | store statuses, errors, flags, enrichment/embedding reports | – |
@@ -89,11 +90,23 @@ uv run egmarket reindex    # replay ALL history through current dedupe rules (ru
   and fuses the ranking with the lexical index (reciprocal-rank fusion). Nothing is downloaded
   until the toggle is used.
 
+## Descriptions & datasheets
+
+Seller descriptions come for free from the JSON we already fetch (Shopify `body_html`,
+WooCommerce `description`, PrestaShop `description_short`, Wix `description`) – converted to
+plain text and stored per listing in `listings.parquet`, with every documentation-looking link
+(`datasheet`, `.pdf`, manual, schematic, wiki, manufacturer domains) extracted from the HTML.
+The LLM gets the longest seller text as context and writes a neutral 2-3 sentence description,
+up to 6 spec highlights and the MPN. `datasheet_url` is set **only** from a link a seller
+actually published (ranked datasheet+pdf > pdf > docs); otherwise the frontend offers a
+"find datasheet" search by MPN (alldatasheet / Octopart) – no LLM-invented URLs. Cache rows carry
+a `version`; bumping `ENRICHMENT_VERSION` refreshes older answers once (≤ items/run cap).
+
 ## Enrichment model
 
 Default: Hetzner Inference (OpenAI-compatible) `hetzner:Qwen/Qwen3.6-35B-A3B-FP8`, tool-call
 structured output, thinking disabled (`chat_template_kwargs.enable_thinking=false`), paced to
-8 req/min, ≤1500 products/run, batch 30. Any Pydantic AI `provider:model` string works too
+8 req/min, ≤5000 products/run, batch 20. Any Pydantic AI `provider:model` string works too
 (`EGMARKET_AI_MODEL=openai:gpt-5-mini`). Missing credentials → enrichment is skipped, run continues.
 
 ## Run locally

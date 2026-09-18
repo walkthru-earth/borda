@@ -28,7 +28,7 @@ from pydantic_ai.models.openai import OpenAIChatModel, OpenAIChatModelSettings
 from pydantic_ai.providers.openai import OpenAIProvider
 
 from ..config import settings
-from ..models import Enrichment, Product, utcnow
+from ..models import ENRICHMENT_VERSION, Enrichment, Product, utcnow
 from ..normalize import Catalog, slugify
 from ..normalize import names as _names
 from ..normalize.categories import assign_group
@@ -45,7 +45,12 @@ For every input item return exactly one output item with the same `key`.
   words, no quantities/prices. Prefer the well-known part/model number
   (e.g. "ESP32-WROOM-32 DevKit V1", "HC-SR04 Ultrasonic Sensor", "LM2596 Buck Converter Module").
   Two listings of the same physical product MUST get an identical canonical_name.
-- description: one technical sentence (what it is, key specs/interface/voltage).
+- description: 2-3 technical sentences – what it is, what it is used for, key electrical
+  specs (voltage, interface, range, current…). Use the seller text (`desc`) as a source but
+  rewrite it: neutral, no marketing, no seller names, no prices, English.
+- specs: up to 6 "Key: value" highlights actually supported by the name/seller text; omit
+  guesses.
+- mpn: manufacturer part number when identifiable (e.g. "ESP32-WROOM-32", "L298N"), else null.
 - tags: up to 8 lowercase tags for search (family, interface, function, brand).
 - brand: manufacturer if clearly known, else null.
 - group: one of dev-boards, microcontrollers-ics, sensors, wireless-iot, displays-leds,
@@ -59,6 +64,7 @@ class EnrichInput(BaseModel):
     names: list[str] = Field(max_length=4)
     category: str | None = None
     brand: str | None = None
+    desc: str | None = Field(default=None, description="seller description excerpt")
 
 
 class EnrichmentBatch(BaseModel):
@@ -109,11 +115,23 @@ def build_model(name: str | None = None) -> Model | str:
             provider=OpenAIProvider(base_url=settings.hetzner_base_url, api_key=token),
             settings=OpenAIChatModelSettings(
                 temperature=0.0,
-                max_tokens=6000,
+                max_tokens=12000,  # 20 items x (600-char description + specs) with headroom
                 extra_body={"chat_template_kwargs": {"enable_thinking": False}},
             ),
         )
     return name
+
+
+def _excerpt(text: str, limit: int) -> str:
+    """First `limit` chars of a seller description, cut at a sentence/line boundary."""
+    t = " ".join(text.split())
+    if len(t) <= limit:
+        return t
+    cut = t[:limit]
+    for sep in (". ", "; ", ", "):
+        if (i := cut.rfind(sep)) > limit // 2:
+            return cut[: i + 1]
+    return cut
 
 
 class RateLimiter:
@@ -135,6 +153,7 @@ class EnrichReport:
     requested: int = 0
     enriched: int = 0
     cached: int = 0
+    stale: int = 0  # cached under an older prompt version, queued for refresh
     merged: int = 0
     batches: int = 0
     failed_batches: int = 0
@@ -151,8 +170,10 @@ class Enricher:
         requests_per_minute: int | None = None,
         key_aliases: dict[str, str] | None = None,
         mirror_path: Path | None = None,
+        descriptions: dict[str, str] | None = None,
     ):
         self.store = store
+        self.descriptions = descriptions or {}  # product id -> best seller description
         self.key_aliases = key_aliases or {}  # product id -> cache key (e.g. via redirects)
         self.mirror_path = mirror_path  # checkpoint copy, refreshed after every batch
         self.agent = agent or enrichment_agent
@@ -173,11 +194,17 @@ class Enricher:
             self.mirror_path.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(self.store.enrichment_path, self.mirror_path)
 
-    @staticmethod
-    def _to_input(p: Product) -> EnrichInput:
+    def _to_input(self, p: Product) -> EnrichInput:
         # shortest raw names first – they are usually the cleanest
         raw = sorted(set(p.raw_names) | {p.canonical_name}, key=len)[:4]
-        return EnrichInput(key=p.id, names=raw, category=p.category, brand=p.brand)
+        desc = self.descriptions.get(p.id)
+        return EnrichInput(
+            key=p.id,
+            names=raw,
+            category=p.category,
+            brand=p.brand,
+            desc=_excerpt(desc, settings.ai_desc_chars) if desc else None,
+        )
 
     async def enrich(
         self,
@@ -191,15 +218,23 @@ class Enricher:
         limit = settings.ai_max_items_per_run if limit is None else limit
 
         pending: list[Product] = []
+        stale: list[Product] = []
         for p in catalog.sorted_products():
             if p.enriched:
                 continue
             hit = self.cache.get(p.id) or self.cache.get(self.key_aliases.get(p.id, ""))
-            if hit is not None:
+            if hit is not None and hit.version >= ENRICHMENT_VERSION:
                 self._apply(catalog, p, hit, report)
                 report.cached += 1
+            elif hit is not None:
+                self._apply(catalog, p, hit, report)  # keep the old answer until refreshed
+                p.enriched = False
+                stale.append(catalog.products.get(catalog.resolve_id(p.id), p))
             else:
                 pending.append(p)
+        # new products first, then one-off refresh of rows from an older prompt version
+        pending.extend(x for x in stale if x.id in catalog.products and not x.enriched)
+        report.stale = len(stale)
         pending = pending[:limit]
         report.requested = len(pending)
         if not pending:
@@ -261,11 +296,13 @@ class Enricher:
         if p.id not in catalog.products:
             return  # already merged away in this pass
         p.description = e.description
+        p.specs = e.specs or p.specs
+        p.mpn = e.mpn or p.mpn
         p.brand = p.brand or e.brand
         p.tags = sorted(set(p.tags) | set(e.tags))
-        p.group = e.group or assign_group(
-            name=e.canonical_name, tags=p.tags, store_category=p.category
-        )
+        ruled = assign_group(name=e.canonical_name, tags=p.tags, store_category=p.category)
+        vague = {"other", "prototyping"}
+        p.group = e.group if e.group and (e.group not in vague or ruled in vague) else ruled
         p.enriched = True
         p.extra_metadata = {**p.extra_metadata, "enriched_at": utcnow().isoformat()}
         old_name = p.canonical_name

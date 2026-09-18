@@ -10,6 +10,7 @@ from decimal import Decimal
 
 from ..models import Availability, RawOffer
 from .base import BaseScraper
+from .docs import extract_doc_links
 
 _TAG_RE = re.compile(r"<[^>]+>")
 
@@ -51,6 +52,11 @@ class WooCommerceScraper(BaseScraper):
                     category=cats[-1] if cats else None,
                     store_tags=cats + [t["name"] for t in p.get("tags") or []],
                     image=(p.get("images") or [{}])[0].get("src"),
+                    description=(p.get("description") or p.get("short_description")) or None,
+                    links=extract_doc_links(
+                        (p.get("description") or "") + (p.get("short_description") or ""),
+                        p["permalink"],
+                    ),
                     extra=extra,
                 )
                 if offer:

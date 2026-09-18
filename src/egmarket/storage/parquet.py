@@ -7,6 +7,7 @@ Layout under `data/`:
   series.parquet                               chart points sorted by (product_id, ts)
   embeddings.parquet                           int8 sentence embeddings, sorted by product_id
   redirects.parquet                            merged/renamed id -> surviving id
+  listings.parquet                             per seller listing: description text + doc links
   offers/year=YYYY/month=MM/<run_id>.parquet   history rows, append-only, hive partitioned
   store_runs/year=YYYY/month=MM/<run_id>.parquet   scraper health per store per run
   enrichment.parquet                           LLM cache
@@ -94,6 +95,9 @@ CATALOG_SCHEMA = pa.schema(
         ("raw_names", STR_LIST),
         ("tags", STR_LIST),
         ("description", pa.string()),
+        ("specs", STR_LIST),  # "Key: value" highlights from enrichment
+        ("mpn", pa.string()),
+        ("datasheet_url", pa.string()),  # only when a seller page links one
         ("category", pa.string()),
         ("brand", pa.string()),
         ("image", pa.string()),
@@ -135,6 +139,17 @@ STATS_SCHEMA = pa.schema(
         ("group", pa.string()),
     ]
 )
+LISTINGS_SCHEMA = pa.schema(
+    [
+        ("product_id", pa.string()),
+        ("listing_key", pa.string()),
+        ("seller", pa.string()),
+        ("url", pa.string()),
+        ("raw_name", pa.string()),
+        ("description", pa.string()),  # plain text, latest observation
+        ("links", STR_LIST),  # documentation / datasheet links found on the page
+    ]
+)
 REDIRECTS_SCHEMA = pa.schema([("old_id", pa.string()), ("new_id", pa.string())])
 EMBEDDINGS_SCHEMA = pa.schema(
     [
@@ -152,6 +167,7 @@ ENRICHMENT_SCHEMA = pa.schema(
         ("brand", pa.string()),
         ("model", pa.string()),
         ("ts", TS),
+        ("version", pa.int16()),  # prompt/schema version that produced the row
     ]
 )
 
@@ -211,6 +227,7 @@ class ParquetStore:
         self.stats_path = data_dir / "stats.parquet"
         self.embeddings_path = data_dir / "embeddings.parquet"
         self.redirects_path = data_dir / "redirects.parquet"
+        self.listings_path = data_dir / "listings.parquet"
         self.enrichment_path = data_dir / "enrichment.parquet"
         self.written: dict[str, dict[str, Any]] = {}  # relative path -> file_info (manifest)
 
@@ -330,6 +347,23 @@ class ParquetStore:
             row_group_size=2048,
         )
 
+    # ------------------------------------------------------------------ listings (descriptions)
+    def read_listings(self) -> dict[str, dict[str, Any]]:
+        """listing_key -> row (kept across runs so a seller that vanishes keeps its text)."""
+        if not self.listings_path.exists():
+            return {}
+        rows = pq.read_table(self.listings_path).to_pylist()
+        return {r["listing_key"]: r for r in rows}
+
+    def write_listings(self, rows: dict[str, dict[str, Any]]) -> str:
+        return self._write(
+            self.listings_path,
+            pa.Table.from_pylist(list(rows.values()), schema=LISTINGS_SCHEMA),
+            sort_by=["product_id", "seller"],
+            row_group_size=1024,
+            bloom=["product_id"],
+        )
+
     # ------------------------------------------------------------------ embeddings
     def read_embeddings(self) -> dict[str, tuple[bytes, str]]:
         """product_id -> (int8 vector bytes, text hash)."""
@@ -361,7 +395,13 @@ class ParquetStore:
 
     def write_enrichment(self, cache: dict[str, Enrichment], model: str, ts: datetime) -> str:
         rows = [
-            {**e.model_dump(mode="json"), "key": key, "model": model, "ts": ts}
+            {
+                **e.model_dump(mode="json", exclude={"version"}),
+                "key": key,
+                "model": model,
+                "ts": ts,
+                "version": e.version,
+            }
             for key, e in sorted(cache.items())  # dict key wins: products may be re-keyed
         ]
         return self._write(
@@ -370,13 +410,20 @@ class ParquetStore:
 
 
 def read_enrichment_file(path: Path) -> dict[str, Enrichment]:
+    """Rows written by older prompt versions are loaded with their `version` so the enricher
+    can decide to refresh them once."""
     if not path.exists():
         return {}
     out = {}
     for row in pq.read_table(path).to_pylist():
         row.pop("model", None)
         row.pop("ts", None)
-        out[row["key"]] = Enrichment.model_validate(row)
+        version = row.pop("version", None) or 1
+        e = Enrichment.model_validate(
+            {k: v for k, v in row.items() if v is not None or k in ("brand", "mpn")}
+        )
+        e.version = version
+        out[row["key"]] = e
     return out
 
 

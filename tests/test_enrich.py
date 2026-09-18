@@ -143,3 +143,69 @@ def test_enrichment_model_normalises_tags():
     assert isinstance(EnrichmentBatch(items=[e]).items[0], Enrichment)
     with pytest.raises(ValidationError):  # > 8 tags
         Enrichment(key="k", canonical_name="X", description="d", tags=[f"t{i}" for i in range(9)])
+
+
+async def test_legacy_cache_rows_are_refreshed_once(tmp_path, make_offer):
+    from egmarket.models import ENRICHMENT_VERSION
+
+    store = ParquetStore(tmp_path)
+    cat = Catalog()
+    pid, _ = cat.resolve(make_offer("s1", "TP4056 charger module", 15), fuzzy_threshold=93)
+    legacy = Enrichment(
+        key=pid, canonical_name="TP4056 Li-ion Charger Module", description="old", tags=["power"]
+    )
+    legacy.version = 1
+    store.write_enrichment(
+        {pid: legacy},
+        "old-model",
+        __import__("datetime").datetime(2025, 1, 1, tzinfo=__import__("datetime").UTC),
+    )
+
+    calls: list[str] = []
+
+    def respond(messages, info):
+        keys = [
+            json.loads(line)["key"]
+            for line in str(messages[-1].parts[-1].content).splitlines()
+            if line.startswith("{")
+        ]
+        calls.extend(keys)
+        items = [
+            {
+                "key": k,
+                "canonical_name": "TP4056 Li-ion Charger Module",
+                "description": "new richer text",
+                "tags": ["power"],
+                "specs": ["Input: 5V", "Charge current: 1A"],
+                "mpn": "TP4056",
+            }
+            for k in keys
+        ]
+        return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, {"items": items})])
+
+    enricher = Enricher(
+        store,
+        model=FunctionModel(respond),
+        requests_per_minute=10_000,
+        descriptions={pid: "Seller says: 1A charger with protection"},
+    )
+    report = await enricher.enrich(cat)
+    assert (
+        report.stale == 1 and report.enriched == 1 and calls
+    )  # refreshed exactly because of the version
+    p = cat.products[cat.resolve_id(pid)]
+    assert (
+        p.specs == ["Input: 5V", "Charge current: 1A"]
+        and p.mpn == "TP4056"
+        and p.description == "new richer text"
+    )
+    assert ParquetStore(tmp_path).read_enrichment()[p.id].version == ENRICHMENT_VERSION
+
+    report2 = await Enricher(
+        store, model=FunctionModel(respond), requests_per_minute=10_000
+    ).enrich(
+        Catalog.from_products(
+            [pp.model_copy(update={"enriched": False}) for pp in cat.sorted_products()]
+        )
+    )
+    assert report2.stale == 0 and report2.cached == 1  # second time: served from cache

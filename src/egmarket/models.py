@@ -34,6 +34,20 @@ def utcnow() -> datetime:
     return datetime.now(UTC).replace(microsecond=0)
 
 
+_TAG_RE = re.compile(r"<(script|style)[^>]*>.*?</\1>|<[^>]+>", re.S | re.I)
+_BLOCK_RE = re.compile(r"</?(p|div|br|li|tr|h\d|ul|ol|table)[^>]*>", re.I)
+
+
+def html_to_text(fragment: str) -> str:
+    """Seller descriptions arrive as HTML; keep readable plain text with line breaks."""
+    t = _BLOCK_RE.sub("\n", fragment)
+    t = _TAG_RE.sub(" ", t)
+    t = html.unescape(t)
+    t = re.sub(r"[ \t\xa0]+", " ", t)
+    t = re.sub(r"\s*\n\s*", "\n", t)
+    return t.strip()
+
+
 class Availability(StrEnum):
     IN_STOCK = "in_stock"
     OUT_OF_STOCK = "out_of_stock"
@@ -71,7 +85,26 @@ class RawOffer(Base):
     category: str | None = None
     store_tags: list[str] = Field(default_factory=list)
     image: HttpUrl | None = None
+    description: str | None = Field(default=None, max_length=3000, description="seller text, plain")
+    links: list[str] = Field(default_factory=list, description="datasheet / docs / pdf links found")
     extra: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("description", mode="before")
+    @classmethod
+    def _plain_description(cls, v: Any) -> Any:
+        if not isinstance(v, str):
+            return v
+        text = html_to_text(v)
+        return text[:3000] or None
+
+    @field_validator("links", mode="after")
+    @classmethod
+    def _dedupe_links(cls, v: list[str]) -> list[str]:
+        seen: list[str] = []
+        for u in v:
+            if u.startswith("http") and u not in seen and len(u) < 400:
+                seen.append(u)
+        return seen[:10]
 
     @field_validator("raw_name", mode="before")
     @classmethod
@@ -135,7 +168,10 @@ class Product(Base):
         default_factory=list, description="local/seller names (searchable)"
     )
     tags: list[str] = Field(default_factory=list)
-    description: str | None = Field(default=None, max_length=600)
+    description: str | None = Field(default=None, max_length=900)
+    specs: list[str] = Field(default_factory=list, description='"Key: value" highlights')
+    mpn: str | None = Field(default=None, max_length=60, description="manufacturer part number")
+    datasheet_url: HttpUrl | None = Field(default=None, description="only when a seller links one")
     category: str | None = None
     brand: str | None = None
     image: HttpUrl | None = Field(default=None, description="representative product picture")
@@ -154,6 +190,9 @@ class Product(Base):
         return sorted(set(v))
 
 
+ENRICHMENT_VERSION = 2  # bump when the prompt/schema changes enough to be worth a refresh
+
+
 class Enrichment(Base):
     """LLM output for one product – keep tiny, it multiplies across thousands of items."""
 
@@ -164,18 +203,49 @@ class Enrichment(Base):
         "no marketing words, no seller names, English",
     )
     description: str = Field(
-        max_length=240, description="1 sentence, technical, what it is and key specs"
+        max_length=600,
+        description="2-3 technical sentences: what it is, what it is used for, key electrical specs",
+    )
+    specs: list[Annotated[str, StringConstraints(max_length=60)]] = Field(
+        default_factory=list,
+        max_length=6,
+        description='up to 6 "Key: value" spec highlights (e.g. "Voltage: 3.3-5V"), only if known',
+    )
+    mpn: str | None = Field(
+        default=None,
+        max_length=60,
+        description="manufacturer part number if identifiable, else null",
     )
     tags: list[Annotated[str, StringConstraints(to_lower=True, max_length=30)]] = Field(
         max_length=8, description="lowercase search tags: family, interface, function, brand"
     )
     brand: str | None = Field(default=None, max_length=40)
     group: Group | None = Field(default=None, description="one of the fixed taxonomy groups")
+    version: int = Field(default=ENRICHMENT_VERSION, exclude=True, description="cache row version")
 
     @field_validator("tags", mode="after")
     @classmethod
     def _norm_tags(cls, v: list[str]) -> list[str]:
         return sorted({re.sub(r"[^a-z0-9+.-]+", "-", t).strip("-") for t in v if t.strip()})
+
+    @field_validator("mpn", "brand", mode="before")
+    @classmethod
+    def _placeholder_to_none(cls, v: Any) -> Any:
+        if isinstance(v, str) and v.strip().lower() in {
+            "",
+            "generic",
+            "n/a",
+            "na",
+            "none",
+            "null",
+            "unknown",
+            "-",
+            "various",
+            "no-name",
+            "oem",
+        }:
+            return None
+        return v
 
 
 # --------------------------------------------------------------------------- history

@@ -32,8 +32,9 @@ class Settings(BaseSettings):
     # Inference API; any `provider:model` string Pydantic AI understands also works.
     ai_model: str = "hetzner:Qwen/Qwen3.6-35B-A3B-FP8"
     ai_enabled: bool = True
-    ai_batch_size: int = 40
-    ai_max_items_per_run: int = 6000  # ~20 min at 8 req/min x 40 items
+    ai_batch_size: int = 20  # ~5k output tokens with descriptions+specs; fits max_tokens
+    ai_max_items_per_run: int = 5000  # ~31 min at 8 req/min x 20 items
+    ai_desc_chars: int = 500  # seller-description excerpt passed to the model per product
     ai_requests_per_minute: int = 8  # Hetzner limit is 10/min – keep headroom for retries
     hetzner_base_url: str = "https://inference.hetzner.com/api/v1"
     hetzner_token: str | None = Field(

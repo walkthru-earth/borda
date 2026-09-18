@@ -20,6 +20,7 @@ from collections.abc import AsyncIterator
 from ..http import FetchError
 from ..models import Availability, RawOffer
 from .base import BaseScraper
+from .docs import extract_doc_links
 
 log = logging.getLogger(__name__)
 
@@ -32,7 +33,7 @@ query($id: String!, $limit: Int, $offset: Int) {
   catalog { category(categoryId: $id) {
     productsWithMetaData(limit: $limit, offset: $offset, onlyVisible: true) {
       totalCount
-      list { id name urlPart sku price discountedPrice isInStock
+      list { id name urlPart sku price discountedPrice isInStock description
              inventory { status quantity } brand ribbon productType media { fullUrl } }
     } } }
 }"""
@@ -126,6 +127,8 @@ class WixScraper(BaseScraper):
                     sku=p.get("sku") or None,
                     brand=p.get("brand") or None,
                     image=media[0].get("fullUrl") if media else None,
+                    description=p.get("description") or None,
+                    links=extract_doc_links(p.get("description"), self.base),
                     extra={"ribbon": p["ribbon"]} if p.get("ribbon") else {},
                 )
                 if offer:
