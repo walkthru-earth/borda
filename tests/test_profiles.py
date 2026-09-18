@@ -3,6 +3,7 @@
 import json
 from datetime import UTC, datetime
 from decimal import Decimal
+from pathlib import Path
 
 import httpx
 import pyarrow.parquet as pq
@@ -16,10 +17,16 @@ from borda.checkpoint import Checkpoint
 from borda.cli import _diff, main
 from borda.config import Settings, settings
 from borda.enrich import Enricher
-from borda.models import Availability, OfferRecord, RawOffer, Run
+from borda.models import Availability, OfferRecord, Product, RawOffer, Run
 from borda.normalize import Catalog, clean, flag_offers
 from borda.pipeline import RunOptions, rebuild_exports, run_pipeline
-from borda.profiles import CountryProfile, default_profile, load_profile, use_profile
+from borda.profiles import (
+    CountryProfile,
+    active_profile,
+    default_profile,
+    load_profile,
+    use_profile,
+)
 from borda.storage import ParquetStore, build_series, reference_prices
 
 
@@ -97,6 +104,40 @@ def test_custom_profile_env_paths_cli_and_currency_defaults(
     output = capsys.readouterr().out
     assert "us-shop" in output and "fut-electronics" not in output
     assert RawOffer(seller="us-shop", raw_name="Part", url="https://us.test/p").currency == "USD"
+
+
+def test_cli_search_reads_custom_profile_once(tmp_path, us_profile, monkeypatch, capsys):
+    profile_path = tmp_path / "us.json"
+    profile_path.write_text(us_profile.model_dump_json())
+    data_dir = tmp_path / "data"
+    products = [
+        Product(
+            id=f"sensor-{i}",
+            canonical_name=f"Sensor {i}",
+            raw_names=[f"Sensor United States {i}", f"Temperature sensor {i}"],
+            tags=["sensor", "temperature"],
+            sellers=["us-shop"],
+        )
+        for i in range(20)
+    ]
+    ParquetStore(data_dir, profile=us_profile).write_catalog(Catalog.from_products(products))
+    monkeypatch.setattr(settings, "profile", "egypt")
+    monkeypatch.setattr(settings, "data_dir", data_dir)
+    original_read = Path.read_text
+    profile_reads = 0
+
+    def count_reads(path, *args, **kwargs):
+        nonlocal profile_reads
+        if path == profile_path:
+            profile_reads += 1
+        return original_read(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", count_reads)
+    previous_context = active_profile.get()
+    assert main(["--profile", str(profile_path), "search", "sensor"]) == 0
+    assert "sensor-0" in capsys.readouterr().out
+    assert profile_reads == 1
+    assert active_profile.get() is previous_context
 
 
 @pytest.mark.parametrize(

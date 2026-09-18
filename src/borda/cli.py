@@ -13,6 +13,7 @@ import pyarrow.compute as pc
 from .config import settings
 from .observability import setup_logging
 from .pipeline import RunOptions, rebuild_exports, reindex, run_pipeline
+from .profiles import CountryProfile, use_profile
 from .storage import ParquetStore, build_index, search
 
 
@@ -67,7 +68,11 @@ def main(argv: list[str] | None = None) -> int:
         settings.profile = args.profile
     profile = settings.country_profile
     setup_logging(args.verbose)
+    with use_profile(profile):
+        return _execute(args, profile)
 
+
+def _execute(args: argparse.Namespace, profile: CountryProfile) -> int:
     if args.cmd == "run":
         diag, code = asyncio.run(
             run_pipeline(
