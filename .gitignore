@@ -1,0 +1,21 @@
+# secrets
+.env
+.env.*
+!.env.example
+
+# python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+dist/
+
+# scraper http cache (restored by Actions cache, never committed)
+.cache/
+
+# frontend
+frontend/node_modules/
+frontend/.svelte-kit/
+frontend/build/
+frontend/static/data/

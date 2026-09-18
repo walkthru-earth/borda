@@ -1,0 +1,57 @@
+name: Deploy frontend (GitHub Pages)
+
+# Rebuilds the SvelteKit SPA with the latest Parquet data after every data commit.
+# Enable Pages (Settings → Pages → Source: GitHub Actions) for this to publish.
+on:
+  push:
+    branches: [main]
+    paths: ["data/**", "frontend/**", ".github/workflows/deploy-pages.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - name: Bundle parquet data into the site
+        run: pnpm run sync-data ../data
+      - name: Build
+        env:
+          # project pages live under /<repo>/
+          BASE_PATH: /${{ github.event.repository.name }}
+        run: pnpm run build
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: frontend/build
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

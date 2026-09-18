@@ -1,0 +1,50 @@
+# Install once:  uv tool install pre-commit && pre-commit install
+# Run manually:  pre-commit run --all-files
+minimum_pre_commit_version: "4.0.0"
+
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.8
+    hooks:
+      - id: ruff-check
+        args: [--fix, --exit-non-zero-on-fix]
+      - id: ruff-format
+
+  - repo: https://github.com/astral-sh/uv-pre-commit
+    rev: 0.12.16
+    hooks:
+      - id: uv-lock # keep uv.lock in sync with pyproject.toml
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: ^data/
+      - id: end-of-file-fixer
+        exclude: ^data/
+      - id: check-yaml
+      - id: check-toml
+      - id: check-json
+        exclude: ^frontend/tsconfig.*\.json$ # tsconfig allows comments
+      - id: check-added-large-files
+        args: [--maxkb=25000] # parquet history partitions may be large
+      - id: check-merge-conflict
+      - id: detect-private-key
+      - id: no-commit-to-branch
+        args: [--branch, main]
+        stages: [manual] # opt-in: `pre-commit run --hook-stage manual`
+
+  - repo: local
+    hooks:
+      - id: forbid-dotenv
+        name: forbid committing .env files
+        entry: '.env files hold secrets – keep them out of git (use .env.example)'
+        language: fail
+        files: ^\.env(\..*)?$
+        exclude: ^\.env\.example$
+      - id: pytest-quick
+        name: pytest (unit)
+        entry: uv run pytest -q -x
+        language: system
+        pass_filenames: false
+        files: ^(src|tests)/.*\.py$

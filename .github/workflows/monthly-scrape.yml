@@ -1,0 +1,132 @@
+name: Monthly market scrape
+
+on:
+  schedule:
+    - cron: "17 3 1 * *" # 03:17 UTC on the 1st of every month (off the :00 rush)
+  workflow_dispatch:
+    inputs:
+      stores:
+        description: "Space-separated store slugs (empty = all enabled)"
+        required: false
+        default: ""
+      max_pages:
+        description: "Cap listing pages per store (empty = full)"
+        required: false
+        default: ""
+      ai:
+        description: "Run Pydantic AI enrichment"
+        type: boolean
+        default: true
+
+concurrency:
+  group: market-scrape
+  cancel-in-progress: false # never abort a half-finished monthly run
+
+permissions:
+  contents: write
+
+env:
+  UV_LOCKED: "1"
+  EGMARKET_REQUEST_DELAY_S: "0.6"
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 170
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true # caches ~/.cache/uv keyed on uv.lock
+          python-version: "3.12"
+
+      - name: Install
+        run: uv sync --all-groups
+
+      - name: Unit tests
+        run: uv run pytest -q
+
+      # Page cache lets a re-run/retry within the same month reuse already fetched pages
+      # (incremental scraping). It is never committed.
+      - name: Restore scraper page cache
+        uses: actions/cache@v4
+        with:
+          path: .cache/http
+          key: http-cache-${{ github.run_id }}
+          restore-keys: |
+            http-cache-
+
+      - name: Scrape, normalise, enrich, persist
+        id: run
+        env:
+          HETZNER_INFERENCE_TOKEN: ${{ secrets.HETZNER_INFERENCE_TOKEN }}
+          EGMARKET_AI_ENABLED: ${{ inputs.ai == false && 'false' || 'true' }}
+        run: |
+          set -o pipefail
+          args=()
+          [ -n "${{ inputs.stores }}" ] && args+=(--stores ${{ inputs.stores }})
+          [ -n "${{ inputs.max_pages }}" ] && args+=(--max-pages "${{ inputs.max_pages }}")
+          uv run egmarket run "${args[@]}" 2> diagnostics/run.log | tee diagnostics/run-summary.json
+          echo "run_id=$(python3 -c 'import json;print(json.load(open("diagnostics/run-summary.json"))["run_id"])')" >> "$GITHUB_OUTPUT"
+
+      - name: Job summary
+        if: always()
+        run: |
+          {
+            echo "## Market scrape ${{ steps.run.outputs.run_id }}"
+            echo
+            echo '| store | status | offers | pages | error |'
+            echo '|---|---|---:|---:|---|'
+            python3 - <<'PY'
+          import json
+          d = json.load(open("diagnostics/latest.json"))
+          for s in d["stores"]:
+              err = (s.get("error") or "").replace("|", "\\|")[:120]
+              print(f"| {s['seller']} | {s['status']} | {s['offers']} | {s['pages']} | {err} |")
+          print()
+          print(f"**offers** {d['offers_kept']} · **products** {d['products_total']} (+{d['products_new']}) · **flags** {d['flags']}")
+          if d.get("enrichment"):
+              e = d["enrichment"]; print(f"\n**enrichment** enriched={e['enriched']} cached={e['cached']} merged={e['merged']} failed_batches={e['failed_batches']}")
+          for err in d.get("errors", []):
+              print(f"\n> ⚠️ {err}")
+          PY
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload logs & diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: diagnostics-${{ github.run_id }}
+          path: diagnostics/
+          retention-days: 90
+
+      - name: Commit data + diagnostics
+        if: success()
+        run: |
+          git config user.name "market-bot"
+          git config user.email "market-bot@users.noreply.github.com"
+          rm -f diagnostics/run.log diagnostics/run-summary.json   # kept as artifact, not in git
+          git add data diagnostics
+          if git diff --cached --quiet; then
+            echo "nothing to commit"; exit 0
+          fi
+          products=$(python3 -c 'import json;print(json.load(open("data/manifest.json"))["products"])')
+          git commit -m "data: run ${{ steps.run.outputs.run_id }} (${products} products)"
+          git pull --rebase --autostash origin "${GITHUB_REF_NAME}"
+          git push origin HEAD:"${GITHUB_REF_NAME}"
+
+      - name: Fail the job if a store broke
+        if: success()
+        run: |
+          python3 - <<'PY'
+          import json, sys
+          d = json.load(open("diagnostics/latest.json"))
+          failed = [s["seller"] for s in d["stores"] if s["status"] == "failed"]
+          print("failed stores:", failed or "none")
+          # Data is already committed; a non-zero exit here only turns the run red so
+          # someone looks at the store. Remove `sys.exit` for a quieter setup.
+          sys.exit(1 if failed else 0)
+          PY
