@@ -20,6 +20,7 @@ from rapidfuzz import fuzz
 
 from ..models import Product, RawOffer
 from . import names
+from .categories import assign_group
 from .tags import derive_tags
 
 
@@ -168,6 +169,7 @@ class Catalog:
             p.image = offer.image
         if not p.enriched:
             p.tags = derive_tags(p, offer)
+            p.group = assign_group(name=p.canonical_name, tags=p.tags, store_category=p.category)
 
     # ------------------------------------------------------------------ AI unification
     def merge(self, keep_id: str, drop_id: str) -> None:
@@ -184,6 +186,7 @@ class Catalog:
         keep.brand = keep.brand or drop.brand
         keep.category = keep.category or drop.category
         keep.enriched = keep.enriched or drop.enriched
+        keep.group = keep.group if keep.group and keep.group != "other" else drop.group
         keep.extra_metadata = {
             **keep.extra_metadata,
             "merged": sorted({*keep.extra_metadata.get("merged", []), drop_id}),

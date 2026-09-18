@@ -2,12 +2,18 @@
 frontend through hyparquet (snappy + Parquet format 2.x, flat/list columns only).
 
 Layout under `data/`:
-  catalog.parquet                              products (rewritten every run)
-  stats.parquet                                per-product price stats (rewritten)
+  catalog.parquet                              products, sorted by id (rewritten every run)
+  stats.parquet                                per-product price stats, sorted by product_id
+  series.parquet                               chart points sorted by (product_id, ts)
+  embeddings.parquet                           int8 sentence embeddings, sorted by product_id
   offers/year=YYYY/month=MM/<run_id>.parquet   history rows, append-only, hive partitioned
   store_runs/year=YYYY/month=MM/<run_id>.parquet   scraper health per store per run
-  series/bucket=xx/points.parquet              chart-ready points, bucket = id[:2] (rebuilt)
   enrichment.parquet                           LLM cache
+
+Reader-side pruning (hyparquet): every derived file declares `sorting_columns`, carries
+column statistics + a page index, uses small row groups and a split-block Bloom filter on
+the key column. A `filter: {product_id: {$eq: id}}` therefore touches the footer, the Bloom
+filter and one or two row groups – a few KB of range requests instead of the whole file.
 """
 
 from __future__ import annotations
@@ -35,9 +41,13 @@ WRITE_KW: dict[str, Any] = {
     "compression": "snappy",  # hyparquet decodes snappy without extra packages
     "use_dictionary": True,
     "write_statistics": True,
+    "write_page_index": True,  # column index + offset index -> page-level pruning
+    "data_page_version": "2.0",
     "coerce_timestamps": "ms",
     "allow_truncated_timestamps": True,
+    "store_schema": True,  # Arrow schema in metadata -> exact types on read-back
 }
+EMBEDDING_DIM = 384
 
 TS = pa.timestamp("ms", tz="UTC")
 STR_LIST = pa.list_(pa.string())
@@ -87,6 +97,8 @@ CATALOG_SCHEMA = pa.schema(
         ("image", pa.string()),
         ("sellers", STR_LIST),
         ("listings", pa.string()),  # JSON object: listing_key -> url
+        ("group", pa.string()),  # top-level taxonomy category (see normalize/categories.py)
+        ("similar", STR_LIST),  # nearest neighbours by embedding, best first
         ("enriched", pa.bool_()),
         ("extra_metadata", pa.string()),  # JSON object
     ],
@@ -118,6 +130,14 @@ STATS_SCHEMA = pa.schema(
         ("sellers", STR_LIST),
         ("tags", STR_LIST),
         ("image", pa.string()),
+        ("group", pa.string()),
+    ]
+)
+EMBEDDINGS_SCHEMA = pa.schema(
+    [
+        ("product_id", pa.string()),
+        ("vec_i8", pa.binary(EMBEDDING_DIM)),  # L2-normalised vector * 127, int8 per dim
+        ("text_hash", pa.string()),  # sha1[:12] of the embedded text -> recompute only on change
     ]
 )
 ENRICHMENT_SCHEMA = pa.schema(
@@ -137,10 +157,40 @@ def _f(v: Decimal | None) -> float | None:
     return None if v is None else float(v)
 
 
-def write_table(path: Path, table: pa.Table) -> str:
+def write_table(
+    path: Path,
+    table: pa.Table,
+    *,
+    sort_by: list[str] | None = None,
+    row_group_size: int | None = None,
+    bloom: list[str] | None = None,
+) -> str:
+    """Write with reader-friendly layout: sorted rows (declared via `sorting_columns`),
+    bounded row groups and optional Bloom filters on key columns."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    pq.write_table(table, path, **WRITE_KW)
+    kw: dict[str, Any] = dict(WRITE_KW)
+    if sort_by:
+        table = table.sort_by([(c, "ascending") for c in sort_by])
+        kw["sorting_columns"] = [pq.SortingColumn(table.schema.get_field_index(c)) for c in sort_by]
+    if row_group_size:
+        kw["row_group_size"] = row_group_size
+    if bloom and table.num_rows:
+        kw["bloom_filter_options"] = {
+            c: {"ndv": max(table.num_rows, 1), "fpp": 0.01} for c in bloom
+        }
+    pq.write_table(table, path, **kw)
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def file_info(path: Path, sha: str) -> dict[str, Any]:
+    meta = pq.read_metadata(path)
+    return {
+        "sha256": sha,
+        "bytes": path.stat().st_size,
+        "footer": meta.serialized_size + 8,  # + 4-byte length + "PAR1"
+        "rows": meta.num_rows,
+        "row_groups": meta.num_row_groups,
+    }
 
 
 def partition_dir(root: Path, ts: datetime) -> Path:
@@ -152,15 +202,17 @@ class ParquetStore:
         self.data_dir = data_dir
         self.offers_dir = data_dir / "offers"
         self.store_runs_dir = data_dir / "store_runs"
-        self.series_dir = data_dir / "series"
+        self.series_dir = data_dir / "series"  # legacy bucket layout, removed on write
+        self.series_path = data_dir / "series.parquet"
         self.catalog_path = data_dir / "catalog.parquet"
         self.stats_path = data_dir / "stats.parquet"
+        self.embeddings_path = data_dir / "embeddings.parquet"
         self.enrichment_path = data_dir / "enrichment.parquet"
-        self.written: dict[str, str] = {}  # relative path -> sha256 (feeds the manifest)
+        self.written: dict[str, dict[str, Any]] = {}  # relative path -> file_info (manifest)
 
-    def _write(self, path: Path, table: pa.Table) -> str:
-        sha = write_table(path, table)
-        self.written[str(path.relative_to(self.data_dir))] = sha
+    def _write(self, path: Path, table: pa.Table, **layout: Any) -> str:
+        sha = write_table(path, table, **layout)
+        self.written[str(path.relative_to(self.data_dir))] = file_info(path, sha)
         return sha
 
     # ------------------------------------------------------------------ history (append)
@@ -186,6 +238,8 @@ class ParquetStore:
         self._write(
             partition_dir(self.offers_dir, run.ts) / f"{run.run_id}.parquet",
             pa.Table.from_pylist(rows, schema=OFFERS_SCHEMA),
+            sort_by=["product_id", "seller"],
+            row_group_size=8192,
         )
         self._write(
             partition_dir(self.store_runs_dir, run.ts) / f"{run.run_id}.parquet",
@@ -235,27 +289,62 @@ class ParquetStore:
                 "redirects": json.dumps(dict(sorted(catalog.redirects.items()))),
             }
         )
-        return self._write(self.catalog_path, pa.Table.from_pylist(rows, schema=schema))
+        return self._write(
+            self.catalog_path,
+            pa.Table.from_pylist(rows, schema=schema),
+            sort_by=["id"],
+            row_group_size=1024,
+            bloom=["id"],
+        )
 
     # ------------------------------------------------------------------ derived exports
     def write_series(self, points: Iterable[dict[str, Any]]) -> int:
-        """`points` rows follow SERIES_SCHEMA; files are bucketed by product_id[:2]."""
+        """One file sorted by (product_id, ts); small row groups + Bloom filter on
+        product_id let hyparquet fetch a single product's history with 1-2 range reads."""
         if self.series_dir.exists():
-            shutil.rmtree(self.series_dir)  # fully rebuilt -> never stale
-        buckets: dict[str, list[dict[str, Any]]] = {}
-        for row in points:
-            buckets.setdefault(row["product_id"][:2], []).append(row)
-        for bucket, rows in sorted(buckets.items()):
-            rows.sort(key=lambda r: (r["product_id"], r["ts"], r["seller"]))
-            self._write(
-                self.series_dir / f"bucket={bucket}" / "points.parquet",
-                pa.Table.from_pylist(rows, schema=SERIES_SCHEMA),
-            )
-        return len(buckets)
+            shutil.rmtree(self.series_dir)  # legacy bucket layout
+        table = pa.Table.from_pylist(list(points), schema=SERIES_SCHEMA)
+        self._write(
+            self.series_path,
+            table,
+            sort_by=["product_id", "ts", "seller"],
+            row_group_size=4096,
+            bloom=["product_id"],
+        )
+        return table.num_rows
 
     def write_stats(self, rows: list[dict[str, Any]]) -> str:
-        rows.sort(key=lambda r: r["product_id"])
-        return self._write(self.stats_path, pa.Table.from_pylist(rows, schema=STATS_SCHEMA))
+        return self._write(
+            self.stats_path,
+            pa.Table.from_pylist(rows, schema=STATS_SCHEMA),
+            sort_by=["product_id"],
+            row_group_size=2048,
+        )
+
+    # ------------------------------------------------------------------ embeddings
+    def read_embeddings(self) -> dict[str, tuple[bytes, str]]:
+        """product_id -> (int8 vector bytes, text hash)."""
+        if not self.embeddings_path.exists():
+            return {}
+        t = pq.read_table(self.embeddings_path).to_pydict()
+        return {
+            pid: (vec, h)
+            for pid, vec, h in zip(t["product_id"], t["vec_i8"], t["text_hash"], strict=True)
+        }
+
+    def write_embeddings(self, vectors: dict[str, tuple[bytes, str]], model: str) -> str:
+        rows = [
+            {"product_id": k, "vec_i8": v, "text_hash": h} for k, (v, h) in sorted(vectors.items())
+        ]
+        schema = EMBEDDINGS_SCHEMA.with_metadata(
+            {"model": model, "dim": str(EMBEDDING_DIM), "quant": "int8/127", "pooling": "mean+l2"}
+        )
+        return self._write(
+            self.embeddings_path,
+            pa.Table.from_pylist(rows, schema=schema),
+            sort_by=["product_id"],
+            row_group_size=4096,
+        )
 
     # ------------------------------------------------------------------ enrichment cache
     def read_enrichment(self) -> dict[str, Enrichment]:

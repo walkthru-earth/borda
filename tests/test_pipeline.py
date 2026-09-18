@@ -118,13 +118,18 @@ async def test_two_runs_build_history_and_exports(tmp_path, monkeypatch):
     stats = pq.read_table(data / "stats.parquet").to_pylist()
     s = next(r for r in stats if r["product_id"] == "arduino-uno-r3")
     assert (s["min"], s["max"], s["latest_min"], s["in_stock_sellers"]) == (380.0, 450.0, 420.0, 2)
-    pts = pq.read_table(data / "series/bucket=ar/points.parquet")
+    pts = pq.read_table(data / "series.parquet", filters=[("product_id", "=", "arduino-uno-r3")])
     assert pts.num_rows == 4
+    assert uno.group == "dev-boards"
 
     manifest = json.loads((data / "manifest.json").read_text())
     assert [r["run_id"] for r in manifest["runs"]] == store.run_ids()
     assert manifest["offers_total"] == 6 and manifest["parquet_format"] == "2.6"
-    assert "catalog.parquet" in manifest["files"]
+    assert (
+        manifest["files"]["catalog.parquet"]["footer"] > 0
+        and manifest["files"]["series.parquet"]["rows"] == 6
+    )
+    assert manifest["groups"] == {"dev-boards": 1, "sensors": 1}
     assert (diag_dir / "runs" / "20251001T000000Z.json").exists() and (
         diag_dir / "latest.json"
     ).exists()

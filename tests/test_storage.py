@@ -88,11 +88,14 @@ def test_series_and_stats_follow_redirects_and_skip_outliers(tmp_path, make_offe
     assert (st["min"], st["max"], st["median"]) == (100.0, 120.0, 110.0)
     assert st["latest_min"] == 120.0 and st["in_stock_sellers"] == 1
 
-    n_buckets = store.write_series(series)
+    n_points = store.write_series(series)
     store.write_stats(stats)
-    assert n_buckets == 1
-    pts = pq.read_table(tmp_path / f"series/bucket={a[:2]}/points.parquet")
+    assert n_points == 3
+    pts = pq.read_table(tmp_path / "series.parquet", filters=[("product_id", "=", a)])
     assert pts.num_rows == 3
+    meta = pq.read_metadata(tmp_path / "series.parquet")
+    assert meta.row_group(0).sorting_columns[0].column_index == 0  # sorted by product_id
+    assert meta.row_group(0).column(0).statistics.has_min_max
     assert reference_prices(store.read_offers(), cat) == {a: [100.0, 110.0, 120.0]}
 
 

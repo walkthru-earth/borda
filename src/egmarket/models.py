@@ -23,6 +23,8 @@ from pydantic import (
     field_validator,
 )
 
+from .taxonomy import Group
+
 Currency = Annotated[str, StringConstraints(to_upper=True, min_length=3, max_length=3)]
 Price = Annotated[Decimal, Field(gt=0, max_digits=12, decimal_places=2)]
 Slug = Annotated[str, StringConstraints(pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$", max_length=96)]
@@ -141,6 +143,8 @@ class Product(Base):
     listings: dict[str, str] = Field(
         default_factory=dict, description="listing_key -> product URL for every known seller page"
     )
+    group: str | None = Field(default=None, description="top-level taxonomy category")
+    similar: list[Slug] = Field(default_factory=list, description="nearest neighbours, best first")
     enriched: bool = False
     extra_metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -166,6 +170,7 @@ class Enrichment(Base):
         max_length=8, description="lowercase search tags: family, interface, function, brand"
     )
     brand: str | None = Field(default=None, max_length=40)
+    group: Group | None = Field(default=None, description="one of the fixed taxonomy groups")
 
     @field_validator("tags", mode="after")
     @classmethod
@@ -222,8 +227,20 @@ class RunSummary(Base):
     stores_failed: int
 
 
+class FileInfo(Base):
+    sha256: str
+    bytes: int
+    footer: int | None = Field(
+        default=None,
+        description="Parquet footer size incl. trailer; lets a reader fetch it exactly",
+    )
+    rows: int | None = None
+    row_groups: int | None = None
+
+
 class Manifest(Base):
-    """Versioning metadata so diffs between runs are cheap to compute."""
+    """Versioning metadata so diffs between runs are cheap to compute, plus per-file facts
+    (size, footer, row groups) the frontend uses to plan range requests."""
 
     schema_version: int
     pipeline_version: str
@@ -231,5 +248,6 @@ class Manifest(Base):
     generated_at: datetime
     products: int
     offers_total: int
-    files: dict[str, str] = Field(default_factory=dict, description="relative path -> sha256")
+    groups: dict[str, int] = Field(default_factory=dict, description="taxonomy group -> products")
+    files: dict[str, FileInfo] = Field(default_factory=dict, description="relative path -> info")
     runs: list[RunSummary] = Field(default_factory=list)

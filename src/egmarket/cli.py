@@ -7,7 +7,6 @@ import asyncio
 import json
 import logging
 import sys
-from pathlib import Path
 
 import pyarrow.compute as pc
 
@@ -26,6 +25,7 @@ def _p() -> argparse.ArgumentParser:
     r.add_argument("--stores", nargs="*", help="store slugs (default: all enabled)")
     r.add_argument("--max-pages", type=int, help="cap listing pages per store (dev)")
     r.add_argument("--no-ai", action="store_true", help="skip Pydantic AI enrichment")
+    r.add_argument("--no-embeddings", action="store_true", help="skip similarity embeddings")
     r.add_argument("--ai-limit", type=int, help="max products to enrich this run")
     r.add_argument("--dry-run", action="store_true", help="scrape + normalise, write nothing")
     r.add_argument("--run-id")
@@ -36,7 +36,8 @@ def _p() -> argparse.ArgumentParser:
     s.add_argument("query", nargs="+")
     s.add_argument("--limit", type=int, default=15)
 
-    sub.add_parser("rebuild", help="rebuild series/stats from history without scraping")
+    rb = sub.add_parser("rebuild", help="rebuild groups/embeddings/series/stats without scraping")
+    rb.add_argument("--no-embeddings", action="store_true")
 
     d = sub.add_parser("diff", help="compare the last two runs (new/removed products, price moves)")
     d.add_argument("--top", type=int, default=20)
@@ -64,6 +65,7 @@ def main(argv: list[str] | None = None) -> int:
                     max_pages=args.max_pages,
                     ai=not args.no_ai,
                     ai_limit=args.ai_limit,
+                    embeddings=not args.no_embeddings,
                     dry_run=args.dry_run,
                     run_id=args.run_id,
                 )
@@ -87,7 +89,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.cmd == "rebuild":
-        points, products = rebuild_exports(settings.data)
+        points, products = rebuild_exports(settings.data, embeddings=not args.no_embeddings)
         print(f"rebuilt {points} series points for {products} products")
         return 0
 
@@ -148,12 +150,10 @@ def _show(store: ParquetStore, product_id: str) -> int:
         print(f"unknown product {product_id}")
         return 1
     print(p.model_dump_json(indent=1, exclude_none=True))
-    bucket = Path(store.series_dir, f"bucket={pid[:2]}", "points.parquet")
-    if bucket.exists():
+    if store.series_path.exists():
         import pyarrow.parquet as pq
 
-        t = pq.read_table(bucket)
-        t = t.filter(pc.equal(t["product_id"], pid))
+        t = pq.read_table(store.series_path, filters=[("product_id", "=", pid)])
         for row in t.to_pylist():
             print(
                 f"{row['ts']:%Y-%m-%d}  {row['seller']:18} {row['price']!s:>10} {row['currency']}  {row['availability']}"

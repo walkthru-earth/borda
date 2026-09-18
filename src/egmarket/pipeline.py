@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -17,8 +18,10 @@ from pydantic import BaseModel, Field
 from . import SCHEMA_VERSION, __version__
 from .config import settings
 from .enrich import Enricher, EnrichReport
+from .enrich.embed import embed_catalog
 from .http import Fetcher
 from .models import (
+    FileInfo,
     Manifest,
     OfferRecord,
     RawOffer,
@@ -29,6 +32,7 @@ from .models import (
     utcnow,
 )
 from .normalize import Catalog, flag_offers
+from .normalize.categories import assign_group
 from .scrapers import STORES, Store, build_scraper
 from .storage import PARQUET_FORMAT, ParquetStore, build_series, reference_prices
 
@@ -41,6 +45,7 @@ class RunOptions:
     max_pages: int | None = None
     ai: bool = True
     ai_limit: int | None = None
+    embeddings: bool = True
     dry_run: bool = False
     run_id: str | None = None
     ts: datetime | None = None  # override observation time (tests / backfills)
@@ -62,6 +67,7 @@ class Diagnostics(BaseModel):
     products_new: int
     flags: dict[str, int] = Field(default_factory=dict)
     enrichment: dict | None = None
+    embeddings: dict | None = None
     errors: list[str] = Field(default_factory=list)
 
 
@@ -210,16 +216,23 @@ async def run_pipeline(opts: RunOptions) -> tuple[Diagnostics, int]:
         diag.duration_s = round(time.monotonic() - t0, 1)
         return diag, 0
 
-    # 5. persist canonical history + catalog (Parquet)
+    # 5. embeddings + nearest neighbours (best effort; needs the ONNX model download)
+    if opts.embeddings and settings.embeddings_enabled:
+        emb = embed_catalog(store, catalog)
+        diag.embeddings = emb.__dict__
+        if emb.error:
+            diag.errors.append(f"embeddings: {emb.error}")
+
+    # 6. persist canonical history + catalog (Parquet)
     store.write_run(run)
     store.write_catalog(catalog)
 
-    # 6. derived exports rebuilt from the full history (merges/redirects apply retroactively)
+    # 7. derived exports rebuilt from the full history (merges/redirects apply retroactively)
     series_rows, stats_rows = build_series(store.read_offers(), catalog)
     store.write_series(series_rows)
     store.write_stats(stats_rows)
 
-    # 7. manifest
+    # 8. manifest
     _write_manifest(store, run, catalog, new_products)
 
     diag.duration_s = round(time.monotonic() - t0, 1)
@@ -227,10 +240,19 @@ async def run_pipeline(opts: RunOptions) -> tuple[Diagnostics, int]:
     return diag, 0
 
 
-def rebuild_exports(data_dir: Path) -> tuple[int, int]:
-    """Recompute series/stats from history without scraping (after manual catalog fixes)."""
+def rebuild_exports(data_dir: Path, *, embeddings: bool = True) -> tuple[int, int]:
+    """Recompute groups, embeddings/neighbours, series and stats from what is on disk –
+    no scraping. Use after manual catalog fixes or a storage-format upgrade."""
     store = ParquetStore(data_dir)
     catalog = store.read_catalog()
+    for p in catalog.products.values():
+        if not p.group:
+            p.group = assign_group(name=p.canonical_name, tags=p.tags, store_category=p.category)
+    if embeddings and settings.embeddings_enabled:
+        emb = embed_catalog(store, catalog)
+        if emb.error:
+            log.warning("embeddings: %s", emb.error)
+    store.write_catalog(catalog)
     series_rows, stats_rows = build_series(store.read_offers(), catalog)
     store.write_series(series_rows)
     store.write_stats(stats_rows)
@@ -260,7 +282,8 @@ def _write_manifest(store: ParquetStore, run: Run, catalog: Catalog, new_product
         generated_at=run.ts,
         products=len(catalog.products),
         offers_total=store.read_offers(columns=["run_id"]).num_rows,
-        files=dict(sorted(store.written.items())),
+        groups=dict(sorted(Counter(p.group or "other" for p in catalog.products.values()).items())),
+        files={k: FileInfo(**v) for k, v in sorted(store.written.items())},
         runs=[*prev, summary][-240:],
     )
     path.write_text(manifest.model_dump_json(indent=1) + "\n")

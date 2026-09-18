@@ -29,6 +29,7 @@ from ..config import settings
 from ..models import Enrichment, Product, utcnow
 from ..normalize import Catalog, slugify
 from ..normalize import names as _names
+from ..normalize.categories import assign_group
 from ..storage import ParquetStore
 
 log = logging.getLogger(__name__)
@@ -44,6 +45,9 @@ For every input item return exactly one output item with the same `key`.
 - description: one technical sentence (what it is, key specs/interface/voltage).
 - tags: up to 8 lowercase tags for search (family, interface, function, brand).
 - brand: manufacturer if clearly known, else null.
+- group: one of dev-boards, microcontrollers-ics, sensors, wireless-iot, displays-leds,
+  motors-drivers, power, passive-components, semiconductors, connectors-cables, prototyping,
+  tools-instruments, 3d-printing-cnc, robotics-kits, other.
 Return only the structured output."""
 
 
@@ -227,6 +231,9 @@ class Enricher:
         p.description = e.description
         p.brand = p.brand or e.brand
         p.tags = sorted(set(p.tags) | set(e.tags))
+        p.group = e.group or assign_group(
+            name=e.canonical_name, tags=p.tags, store_category=p.category
+        )
         p.enriched = True
         p.extra_metadata = {**p.extra_metadata, "enriched_at": utcnow().isoformat()}
         old_name = p.canonical_name

@@ -40,6 +40,8 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("HETZNER_INFERENCE_TOKEN", "EGMARKET_HETZNER_TOKEN"),
     )
 
+    embeddings_enabled: bool = True  # ONNX MiniLM vectors for similarity search
+
     # dedupe / validation
     fuzzy_threshold: int = 93
     outlier_factor: float = 8.0  # flag if price differs from product median by this factor

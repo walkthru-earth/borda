@@ -13,6 +13,10 @@ dependencies = [
     "selectolax>=0.4",
     "rapidfuzz>=3.14",
     "pyarrow>=25.0.1",
+    "onnxruntime>=1.20",
+    "tokenizers>=0.21",
+    "huggingface-hub>=0.30",
+    "numpy>=2",
 ]
 
 [project.scripts]
