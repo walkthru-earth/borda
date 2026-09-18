@@ -41,3 +41,16 @@ check the seller before buying.
 - [Brand assets](docs/brand/README.md)
 
 Contributor and coding-agent guidance: [AGENTS.md](AGENTS.md).
+
+## Citation
+
+```bibtex
+@software{borda,
+  author  = {Youssef Harby, Myagmarjargal Mendbayar},
+  title   = {Borda: Electronic Component Search and Price Comparison in Egypt},
+  year    = {2026},
+  url     = {https://github.com/walkthru-earth/borda},
+  license = {CC-BY-4.0},
+  note    = {Walkthru.Earth}
+}
+```

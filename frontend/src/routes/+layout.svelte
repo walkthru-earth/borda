@@ -13,7 +13,11 @@
  import { catalog } from '$lib/data.svelte';
  let { children } = $props();
  onMount(() => {
-  document.querySelectorAll('[data-borda-static-seo]').forEach(node => node.remove());
+  document.querySelectorAll('[data-borda-static-seo]').forEach(node => {
+   // Svelte updates document.title by reusing the static title element.
+   if (node.tagName === 'TITLE') node.removeAttribute('data-borda-static-seo');
+   else node.remove();
+  });
   const queryLanguage = new URLSearchParams(location.search).get('lang');
   let saved: string | null = null;
   try { saved = localStorage.getItem('borda-language'); } catch { /* Private browsing can disable storage. */ }
