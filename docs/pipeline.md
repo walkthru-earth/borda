@@ -72,8 +72,9 @@ how to publish a selected snapshot. UI translations currently cover English and 
 | slug | platform | method | status |
 |---|---|---|---|
 | fut-electronics, devboardsmarket, circuits-elec | Shopify | `/products.json` | on |
-| uge-one, microohm, makerselectronics, mostelectronic, fares-pcb | WooCommerce | Store API `/wp-json/wc/store/v1/products` | on |
-| ic-hat | PrestaShop | XHR JSON listing | on |
+| uge-one, makerselectronics, mostelectronic, fares-pcb | WooCommerce | Store API `/wp-json/wc/store/v1/products` | on |
+| microohm | WooCommerce | Store API `/wp-json/wc/store/v1/products` | off: temporarily skipped after runner 403 |
+| ic-hat | PrestaShop | XHR JSON listing | off: temporarily skipped after runner 403 |
 | ram-e-shop | Odoo 17 | HTML cards (schema.org microdata), `?ppg=200` → ~16 pages | on |
 | easytest | custom | HTML `data-et-*` attributes | on |
 | maamoon | Wix | anonymous storefront GraphQL (`/_api/wix-ecommerce-storefront-web/api`, 250/page); sitemap + JSON-LD fallback | on |

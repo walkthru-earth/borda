@@ -46,7 +46,8 @@
       "name": "Micro Ohm Electronics",
       "base_url": "https://microohm-eg.com",
       "platform": "woocommerce",
-      "note": "403 from GitHub-hosted runner IPs (works from Egypt/residential); set BORDA_PROXY_URL."
+      "enabled": false,
+      "note": "Temporarily skipped: 403 from the GitHub-hosted runner; re-enable when a proxy is configured."
     },
     {
       "slug": "makerselectronics",
@@ -71,10 +72,11 @@
       "name": "IC Hat",
       "base_url": "https://ic-hat.com/en",
       "platform": "prestashop",
+      "enabled": false,
       "params": {
         "listing": "2-home"
       },
-      "note": "403 from GitHub-hosted runner IPs (works from Egypt/residential); set BORDA_PROXY_URL."
+      "note": "Temporarily skipped: 403 from the GitHub-hosted runner; re-enable when a proxy is configured."
     },
     {
       "slug": "ram-e-shop",
