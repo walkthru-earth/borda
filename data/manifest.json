@@ -17,6 +17,7 @@
  "pipeline_version": "0.1.0",
  "parquet_format": "2.6",
  "generated_at": "2026-09-18T21:05:03Z",
+ "exported_at": "2026-09-19T20:06:42Z",
  "products": 20871,
  "offers_total": 93363,
  "groups": {

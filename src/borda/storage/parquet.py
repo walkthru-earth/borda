@@ -424,10 +424,10 @@ class ParquetStore:
     def write_enrichment(self, cache: dict[str, Enrichment], model: str, ts: datetime) -> str:
         rows = [
             {
-                **e.model_dump(mode="json", exclude={"version"}),
+                **e.model_dump(mode="json", exclude={"version", "ts"}),
                 "key": key,
                 "model": model,
-                "ts": ts,
+                "ts": e.ts or ts,  # rows keep the time they were produced across saves
                 "version": e.version,
             }
             for key, e in sorted(cache.items())  # dict key wins: products may be re-keyed
@@ -445,12 +445,13 @@ def read_enrichment_file(path: Path) -> dict[str, Enrichment]:
     out = {}
     for row in pq.read_table(path).to_pylist():
         row.pop("model", None)
-        row.pop("ts", None)
+        ts = row.pop("ts", None)
         version = row.pop("version", None) or 1
         e = Enrichment.model_validate(
             {k: v for k, v in row.items() if v is not None or k in ("brand", "mpn")}
         )
         e.version = version
+        e.ts = ts
         out[row["key"]] = e
     return out
 

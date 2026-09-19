@@ -58,8 +58,11 @@ export interface Hit { id: string; score: number }
 
 export async function semanticSearch(query: string, k = 60, onProgress?: (p: Progress) => void): Promise<Hit[]> {
 	if (!query.trim() || !(k > 0)) return [];
-	const [extract, { ids, dim, vectors }] = await Promise.all([loadEncoder(onProgress), loadMatrix()]);
+	const [extract, { ids, dim, vectors, model }] = await Promise.all([loadEncoder(onProgress), loadMatrix()]);
 	if (!ids.length) return [];
+	if (model !== null && model !== MODEL_ID) {
+		throw new Error(`AI search index was built with ${model}, not ${MODEL_ID}; keyword search still works.`);
+	}
 	const out = await extract(query, { pooling: 'mean', normalize: true });
 	if (out.data.length !== dim || out.data.some((value) => !Number.isFinite(value))) {
 		throw new Error('AI search returned an incompatible query vector.');

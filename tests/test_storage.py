@@ -208,8 +208,11 @@ def test_enrichment_cache_roundtrip_keeps_product_details(tmp_path):
         tags=["charger"],
         group="power",
     )
-    store.write_enrichment({"part": enrichment}, "test", datetime(2025, 9, 1, tzinfo=UTC))
-    assert store.read_enrichment()["part"] == enrichment
+    saved_at = datetime(2025, 9, 1, tzinfo=UTC)
+    store.write_enrichment({"part": enrichment}, "test", saved_at)
+    loaded = store.read_enrichment()["part"]
+    assert loaded.model_dump() == enrichment.model_dump()
+    assert (loaded.version, loaded.ts) == (enrichment.version, saved_at)
 
 
 def test_rebuild_manifest_keeps_unchanged_exports(tmp_path, make_offer):
@@ -234,3 +237,47 @@ def test_rebuild_manifest_keeps_unchanged_exports(tmp_path, make_offer):
     rebuild_exports(tmp_path, embeddings=False)
     files = json.loads((tmp_path / "manifest.json").read_text())["files"]
     assert all(files[key] == value for key, value in expected.items())
+
+
+def test_enrichment_rows_keep_their_own_timestamp_across_saves(tmp_path):
+    from borda.models import Enrichment
+
+    store = ParquetStore(tmp_path)
+    first = datetime(2025, 9, 1, tzinfo=UTC)
+    later = datetime(2025, 10, 1, tzinfo=UTC)
+    old = Enrichment(key="old", canonical_name="LM2596 Module", description="Buck.", tags=["power"])
+    store.write_enrichment({"old": old}, "test", first)
+    cache = store.read_enrichment()
+    assert cache["old"].ts == first
+    cache["new"] = Enrichment(key="new", canonical_name="TP4056", description="Charger.", tags=[])
+    store.write_enrichment(cache, "test", later)
+    rows = {r["key"]: r for r in pq.read_table(store.enrichment_path).to_pylist()}
+    assert rows["old"]["ts"] == first  # unchanged row keeps when it was produced
+    assert rows["new"]["ts"] == later  # a fresh answer is stamped with this save
+
+
+def test_cache_bookkeeping_fields_stay_out_of_the_llm_schema():
+    from borda.enrich.ai import EnrichmentBatch
+
+    props = EnrichmentBatch.model_json_schema()["$defs"]["Enrichment"]["properties"]
+    assert "version" not in props and "ts" not in props
+    assert {"key", "canonical_name", "description", "tags"} <= set(props)
+
+
+def test_rebuild_manifest_records_export_time_but_keeps_observation_time(tmp_path, make_offer):
+    from borda.pipeline import rebuild_exports
+
+    cat = Catalog()
+    pid, _ = cat.resolve(make_offer("s1", "DHT22 sensor", 100), fuzzy_threshold=93)
+    store = ParquetStore(tmp_path)
+    store.write_catalog(cat)
+    store.write_listings({})
+    observed = datetime(2025, 9, 1, tzinfo=UTC)
+    store.write_run(_run("r1", observed, [(pid, "s1", 100)]))
+    from borda.pipeline import _write_manifest
+
+    _write_manifest(store, _run("r1", observed, [(pid, "s1", 100)]), cat, 1)
+    rebuild_exports(tmp_path, embeddings=False)
+    manifest = json.loads((tmp_path / "manifest.json").read_text())
+    assert datetime.fromisoformat(manifest["generated_at"]) == observed
+    assert datetime.fromisoformat(manifest["exported_at"]) > observed

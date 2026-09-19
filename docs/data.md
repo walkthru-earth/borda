@@ -14,9 +14,9 @@
 | `embeddings.parquet` | int8 MiniLM sentence vectors (384 B/product) + text hash | sorted by product_id |
 | `redirects.parquet` | merged / renamed id → surviving id (old URLs keep working) | sorted |
 | `listings.parquet` | per seller listing: plain-text **seller description** + **documentation links** found on the page (latest text, kept if the seller drops it) | sorted by product_id, Bloom |
-| `enrichment.parquet` | versioned Pydantic AI enrichment cache | – |
+| `enrichment.parquet` | versioned Pydantic AI enrichment cache; `ts` is when each row was produced (kept across saves), `version` the prompt/schema version | – |
 | `.borda-profile.json` | ownership marker written before the first Parquet update, allowing interrupted runs to resume without relabeling a country | internal, not published to the frontend |
-| `manifest.json` | **profile** (country, comparison currency, locales, timezone, languages), versions, taxonomy counts, per-file **sha256 / bytes / footer size / rows / row groups**, per-run summaries + digests | – |
+| `manifest.json` | **profile** (country, comparison currency, locales, timezone, languages), versions, `generated_at` (observation time of the newest run) and `exported_at` (when the exports were last written, also after `rebuild`/`reindex`), taxonomy counts, per-file **sha256 / bytes / footer size / rows / row groups**, per-run summaries + digests | – |
 | `diagnostics/latest.json`, `diagnostics/runs/*.json` | store statuses, errors, flags, enrichment/embedding reports | – |
 
 Every derived file declares `sorting_columns`, carries column statistics and a page index, and

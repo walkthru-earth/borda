@@ -1,0 +1,162 @@
+# Borda – Egyptian electronics price catalog, as Parquet. Guide for agents using the DuckDB CLI.
+# Site: https://walkthru.earth/borda   Repo: https://github.com/walkthru-earth/borda   License: see repo
+# 20.8k products, ~93k price observations, 10 Egyptian sellers, prices in EGP only. Static files, no API.
+
+## 0. ALWAYS START WITH THE MANIFEST (freshness + file list + run ids)
+DATA=https://walkthru.earth/borda/data/           # served by GitHub Pages, CORS *, HTTP range OK
+RAW=https://raw.githubusercontent.com/walkthru-earth/borda/main/data/   # same files + offers/ + store_runs/
+  duckdb -c "INSTALL httpfs; LOAD httpfs;
+    SELECT generated_at, products, offers_total, profile.currency, runs[-1].run_id AS latest_run,
+           len(runs) AS n_runs FROM read_json('https://walkthru.earth/borda/data/manifest.json');"
+manifest.json fields: profile{id,country_code,currency,timezone,languages}, generated_at (UTC, observation
+time of the newest scrape), exported_at (UTC, when the Parquet exports were last written – a rebuild changes
+this but not generated_at), products, offers_total, groups{taxonomy:count}, files{name:{sha256,bytes,footer,rows,row_groups}},
+runs[{run_id,ts,digest,products,offers,new_products,stores_ok,stores_failed}] (oldest -> newest).
+Snapshot = catalog/stats/series/listings/embeddings/redirects/enrichment .parquet + manifest.json,
+all published together; verify a download with sha256/bytes from files{} when it matters.
+Freshness is observational (scrape time), NOT live stock. Runs are monthly (cron) plus manual reruns.
+
+## 1. SETUP (DuckDB >= 1.1; tested with 1.5)
+  INSTALL httpfs; LOAD httpfs; INSTALL fts; INSTALL vss;   -- fts/vss autoload on first use
+  SET VARIABLE base = 'https://walkthru.earth/borda/data/';
+  -- then: read_parquet(getvariable('base') || 'stats.parquet')  (or clone the repo and use data/*.parquet)
+Remote point lookups are cheap: files are sorted, have Bloom filters on id/product_id and small row groups,
+so WHERE product_id = '...' reads footer + one row group. Full scans download the whole file (max 7 MB).
+Reserved words used as column names – ALWAYS quote them: "group", "similar". Avoid aliases named
+key, before, mode, rows, groups. Timestamps are TIMESTAMPTZ; CLI prints them in your local zone (+03 = Cairo).
+
+## 2. FILES AND COLUMNS
+catalog.parquet   (1 row / product, sorted by id)
+  id (slug, = URL https://walkthru.earth/borda/p/<id>), canonical_name, canonical_name_ar (7% filled),
+  raw_names[] (seller titles, often the best search text), tags[], description, description_ar,
+  specs[] ("Key: value" strings), specs_ar[], mpn, brand (manufacturer only, 15% filled), datasheet_url
+  (24%, always from seller pages), category (raw seller category, 875 values, 20% NULL),
+  "group" (15-value taxonomy, see manifest.groups), image, sellers[], listings (JSON {listing_key:url}),
+  "similar"[] (8 precomputed nearest neighbours), enriched (bool, AI-described), extra_metadata (JSON).
+stats.parquet     (1 row / product with prices; 4 products have none)
+  product_id, canonical_name, currency ('EGP'), min, max, median (all-time, all sellers),
+  latest_min (!! may be an OUT-OF-STOCK listing), latest_ts, in_stock_sellers, observations,
+  current_offers = JSON array [{ts,seller,price,currency,availability,url}] = newest observation per
+  seller+url listing. THIS is the source of truth for "what does it cost now / who has stock".
+  sellers[], tags[], image, "group" (denormalised from catalog).
+series.parquet    chart points: product_id, ts, seller, price, currency, availability, url. Sorted by
+  (product_id, ts). Outlier/foreign-currency rows are excluded here (they stay in offers/).
+listings.parquet  1 row / seller listing: product_id, listing_key ('seller:/path'), seller, url, raw_name,
+  description (plain-text seller page, avg 1.1 kB, 86% filled), links[] (PDF/zip docs found on the page).
+embeddings.parquet product_id, vec_i8 (BLOB, 384 x int8 = round(v*127) of L2-normalised
+  all-MiniLM-L6-v2 sentence vector), text_hash. Cosine(a,b) ~ dot(a,b)/127^2. The encoder name is in the
+  file's key/value metadata: SELECT * FROM parquet_kv_metadata('embeddings.parquet') -> model/dim/quant.
+redirects.parquet old_id -> new_id (1692 rows, no chains). Old ids appear in raw offers/; resolve them.
+enrichment.parquet AI cache (key ~= product id, version = prompt version, ts = when produced). Not needed for search.
+offers/year=YYYY/month=MM/<run_id>.parquet  (RAW only, one file per run, append-only, NOT in DATA)
+  run_id, ts, product_id (may be a pre-merge id!), seller, raw_name, url, price, currency,
+  availability, sku, category, image, flags[] ∈ {missing_price, outlier_high, outlier_low, implausible_price}.
+  URL from run_id: .../offers/year=<run_id[1:4]>/month=<run_id[5:6]>/<run_id>.parquet
+store_runs/year=.../<run_id>.parquet  scraper health: seller, status ∈ {ok,partial,failed,skipped},
+  offers, pages, duration_s, error. Use it before blaming a seller for "no prices".
+availability vocabulary everywhere: 'in_stock' | 'out_of_stock' (no other values today).
+Sellers (id -> share of listings): makerselectronics 37%, uge-one 25%, ram-e-shop 12%, mostelectronic,
+circuits-elec, maamoon, fut-electronics, fares-pcb, easytest, devboardsmarket. amazon-eg, eshopmas,
+ic-hat, microohm, rsdelivers exist in store_runs as skipped/failed (bot protection) – no prices.
+
+## 3. RECIPES (all tested)
+-- 3a. Current offers for one product, cheapest first (unnest the JSON array)
+WITH co AS (SELECT product_id, unnest(from_json(current_offers,'["json"]')) o
+            FROM read_parquet(getvariable('base')||'stats.parquet') WHERE product_id='esp32-cam')
+SELECT o->>'seller' seller, (o->>'price')::DOUBLE price, o->>'availability' avail, o->>'url' url
+FROM co ORDER BY price;
+
+-- 3b. Keyword search that handles part numbers, digits and Arabic: FTS on a local table
+CREATE TABLE cat AS SELECT id, canonical_name, canonical_name_ar, brand, "group", category, mpn,
+  array_to_string(raw_names,' ') raw_names_txt, array_to_string(tags,' ') tags_txt,
+  array_to_string(specs,' ') specs_txt, description FROM read_parquet(getvariable('base')||'catalog.parquet');
+PRAGMA create_fts_index('cat','id','canonical_name','canonical_name_ar','raw_names_txt','tags_txt',
+  'specs_txt','mpn','brand','description', stemmer='none', ignore='[^a-z0-9\p{Arabic}]+');
+--   !! default ignore='(\\.|[^a-z])+' deletes digits+Arabic: 'bc337' -> 'bc' matched 55 rows; fixed: 2.
+--   PRAGMA options use '=', the match_bm25 macro uses ':='.
+SELECT id, canonical_name, score FROM (SELECT id, canonical_name,
+  fts_main_cat.match_bm25(id, 'esp32 cam', conjunctive:=1) score FROM cat)
+WHERE score IS NOT NULL ORDER BY score DESC LIMIT 10;
+--   restrict fields: fields:='canonical_name,raw_names_txt'; Arabic: match_bm25(id,'مقاومة') works.
+--   Cheap alternative without an index: WHERE canonical_name ILIKE '%x%' OR list_contains(tags,'esp32')
+--   OR EXISTS (SELECT 1 FROM unnest(raw_names) r(n) WHERE n ILIKE '%x%').
+
+-- 3c. Search hits -> best IN-STOCK price + seller (never use latest_min for "in stock")
+WITH hits AS (SELECT id, canonical_name FROM (SELECT id, canonical_name,
+         fts_main_cat.match_bm25(id,'arduino uno r3') s FROM cat) WHERE s IS NOT NULL ORDER BY s DESC LIMIT 10),
+co AS (SELECT s.product_id, unnest(from_json(s.current_offers,'["json"]')) o
+       FROM read_parquet(getvariable('base')||'stats.parquet') s WHERE s.product_id IN (SELECT id FROM hits))
+SELECT h.canonical_name,
+  min((o->>'price')::DOUBLE) FILTER (WHERE o->>'availability'='in_stock') best_in_stock,
+  arg_min(o->>'seller',(o->>'price')::DOUBLE) FILTER (WHERE o->>'availability'='in_stock') seller,
+  count(*) listings FROM hits h JOIN co ON co.product_id=h.id GROUP BY ALL ORDER BY best_in_stock NULLS LAST;
+
+-- 3d. Budget + group + in stock (same listing must satisfy every condition)
+WITH co AS (SELECT product_id, canonical_name, unnest(from_json(current_offers,'["json"]')) o
+            FROM read_parquet(getvariable('base')||'stats.parquet') WHERE "group"='dev-boards')
+SELECT product_id, canonical_name, min((o->>'price')::DOUBLE) best, list(DISTINCT o->>'seller') sellers
+FROM co WHERE o->>'availability'='in_stock' AND (o->>'price')::DOUBLE <= 300 GROUP BY 1,2 ORDER BY best;
+
+-- 3e. Cross-seller spread (who overcharges) – in-stock listings, >=3 sellers
+WITH co AS (SELECT product_id, unnest(from_json(current_offers,'["json"]')) o FROM read_parquet(getvariable('base')||'stats.parquet'))
+SELECT product_id, count(DISTINCT o->>'seller') sellers, min((o->>'price')::DOUBLE) lo, max((o->>'price')::DOUBLE) hi
+FROM co WHERE o->>'availability'='in_stock' GROUP BY 1 HAVING sellers>=3 ORDER BY hi/lo DESC LIMIT 20;
+
+-- 3f. Price history (chart) and per-seller freshness
+SELECT ts, seller, price, availability FROM read_parquet(getvariable('base')||'series.parquet')
+WHERE product_id='arduino-uno-r3' ORDER BY ts, seller;
+SELECT o->>'seller' seller, max((o->>'ts')::TIMESTAMPTZ) newest, count(*) listings
+FROM (SELECT unnest(from_json(current_offers,'["json"]')) o FROM read_parquet(getvariable('base')||'stats.parquet')) GROUP BY 1;
+
+-- 3g. Raw observations of the latest run (RAW GitHub; glob/hive listing does NOT work over https –
+--     build each file URL from manifest.runs[].run_id)
+WITH m AS (SELECT unnest(runs) r FROM read_json(getvariable('base')||'manifest.json'))
+SELECT 'https://raw.githubusercontent.com/walkthru-earth/borda/main/data/offers/year='||r.run_id[1:4]||
+       '/month='||r.run_id[5:6]||'/'||r.run_id||'.parquet' url FROM m ORDER BY r.run_id DESC LIMIT 1;
+SELECT seller, count(*), count(*) FILTER (WHERE len(flags)>0) flagged FROM read_parquet('<url from above>') GROUP BY 1;
+--   Local clone: read_parquet('data/offers/*/*/*.parquet', hive_partitioning=true) then GROUP BY run_id.
+--   Map old ids: LEFT JOIN redirects r ON r.old_id=o.product_id -> coalesce(r.new_id, o.product_id).
+
+-- 3h. Specs / tags / brand / datasheet filters (arrays + lambdas)
+SELECT id, canonical_name, brand, datasheet_url,
+  list_filter(specs, lambda s: s ILIKE 'Operating Voltage%')[1] v
+FROM read_parquet(getvariable('base')||'catalog.parquet')
+WHERE "group"='dev-boards' AND list_has_any(tags,['esp32','stm32','rp2040']) AND datasheet_url IS NOT NULL;
+--   Spec keys are free-form ("Voltage", "Operating Voltage", "Interface", ...): match with ILIKE, not '='.
+--   Seller docs: SELECT unnest(links) FROM listings.parquet WHERE product_id=... (mostly PDFs).
+
+-- 3i. Semantic "more like this" with the stored embeddings (vss + HNSW, all in SQL)
+LOAD vss;
+CREATE TABLE emb AS WITH h AS (SELECT product_id, hex(vec_i8) hx FROM read_parquet(getvariable('base')||'embeddings.parquet'))
+SELECT product_id, list_transform(range(0,384), lambda i:
+  (((('0x'||substr(hx,2*i+1,2))::INTEGER + 128) % 256) - 128) / 127.0)::FLOAT[384] vec FROM h;
+CREATE INDEX emb_idx ON emb USING HNSW (vec) WITH (metric='cosine');
+SET VARIABLE q = (SELECT vec FROM emb WHERE product_id='esp32-cam');   -- index needs a CONSTANT query
+SELECT product_id, array_cosine_distance(vec, getvariable('q')) d FROM emb ORDER BY d LIMIT 10;   -- ~8 ms
+--   BLOB has no [i] indexing in DuckDB -> go through hex(). Result equals catalog."similar".
+--   Free-text -> vector needs all-MiniLM-L6-v2 outside DuckDB; inside DuckDB use FTS (3b) then 3i.
+
+-- 3j. Resolve an old/merged product id
+SELECT coalesce(r.new_id,'my-old-id') FROM (SELECT 1) LEFT JOIN read_parquet(getvariable('base')||'redirects.parquet') r ON r.old_id='my-old-id';
+
+## 4. LESSONS LEARNED / PITFALLS
+- Read manifest.json first; generated_at + runs[-1] tell you how stale everything is. One country per
+  snapshot (Egypt, EGP); never convert or mix currencies. Do not call any of this live stock.
+- latest_min and min/max/median include out-of-stock listings; "cheapest in stock" must come from
+  current_offers with availability='in_stock' on the SAME listing. Zero in-stock sellers != sold out
+  everywhere (stock can be unknown, scraper partial).
+- history depth = number of runs (see manifest.runs); early snapshots may have all runs on one day,
+  so "price dropped" queries over offers/ return nothing yet. Cross-seller spread is the useful signal.
+- Products are identity-preserved: ESP32-CAM, ESP32-CAM-MB and ESP32-S3-CAM are different ids.
+  Do not merge by name similarity; use "similar"/embeddings only to suggest alternatives.
+- category is raw seller text ("Newly Arrived", "UNI-T"); filter by "group" (15 values) instead.
+  brand is a manufacturer (UNI-T, TI, Arduino...), never a shop; 85% NULL – search names/tags too.
+- Text matching: FTS with ignore='[^a-z0-9\p{Arabic}]+' and stemmer='none' (part numbers must not
+  be stemmed). raw_names[] carries seller wording; canonical_name_ar/description_ar are sparse, but
+  Arabic seller titles live in raw_names/listings.raw_name.
+- JSON columns (current_offers, listings, extra_metadata) are VARCHAR: from_json(x,'["json"]') then
+  ->> ; cast prices with ::DOUBLE and ts with ::TIMESTAMPTZ.
+- Quote "group" and "similar"; DuckDB lambdas use `lambda x: ...` (old `->` is deprecated).
+- offers/ product_id can be a retired id (280 of 21k); series/stats are already remapped via redirects.
+- Sellers listed in store_runs as skipped/failed have no data – say so instead of "not sold in Egypt".
+- Product page for humans: https://walkthru.earth/borda/p/<id> ; seller URL is in current_offers.url.

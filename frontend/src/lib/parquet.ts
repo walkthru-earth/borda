@@ -35,6 +35,8 @@ export interface Manifest {
 	pipeline_version: string;
 	parquet_format: string;
 	generated_at: string;
+	/** When the exports were last written (run or rebuild); missing in older manifests. */
+	exported_at?: string;
 	products: number;
 	offers_total: number;
 	groups: Record<string, number>;
@@ -214,14 +216,22 @@ export async function resolveRedirect(id: string): Promise<string | null> {
 	}
 }
 
-/** int8 embedding matrix (n x 384) + ids, for client-side semantic search. */
-export async function loadEmbeddings(): Promise<{ ids: string[]; dim: number; vectors: Int8Array }> {
-	const rows = await readWhole<{ product_id: string; vec_i8: Uint8Array }>('embeddings.parquet', ['product_id', 'vec_i8']);
+/**
+ * int8 embedding matrix (n x 384) + ids, for client-side semantic search.
+ * `model` is the encoder the pipeline recorded in the file's key/value metadata (`null` for
+ * snapshots written before it was stored); callers must refuse a mismatch, otherwise query
+ * vectors and product vectors live in different spaces.
+ */
+export async function loadEmbeddings(): Promise<{ ids: string[]; dim: number; vectors: Int8Array; model: string | null }> {
+	const file = await whole('embeddings.parquet');
+	const metadata = parquetMetadata(file);
+	const model = metadata.key_value_metadata?.find((entry) => entry.key === 'model')?.value ?? null;
+	const rows = (await parquetReadObjects({ file, metadata, columns: ['product_id', 'vec_i8'], compressors })) as { product_id: string; vec_i8: Uint8Array }[];
 	const dim = rows[0]?.vec_i8.length ?? 384;
 	const vectors = new Int8Array(rows.length * dim);
 	if (dim !== 384 || rows.some((row) => row.vec_i8.length !== dim)) {
 		throw new Error('The AI search index is incompatible with the query model. Refresh the catalog and try again.');
 	}
 	rows.forEach((r, i) => vectors.set(new Int8Array(r.vec_i8.buffer, r.vec_i8.byteOffset, dim), i * dim));
-	return { ids: rows.map((r) => r.product_id), dim, vectors };
+	return { ids: rows.map((r) => r.product_id), dim, vectors, model };
 }

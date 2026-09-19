@@ -22,6 +22,7 @@ from pydantic import (
     computed_field,
     field_validator,
 )
+from pydantic.json_schema import SkipJsonSchema
 
 from .config import settings
 from .profiles import PublicProfile, default_profile
@@ -252,7 +253,12 @@ class Enrichment(Base):
     )
     brand: str | None = Field(default=None, max_length=40)
     group: Group | None = Field(default=None, description="one of the fixed taxonomy groups")
-    version: int = Field(default=ENRICHMENT_VERSION, exclude=True, description="cache row version")
+    # Cache bookkeeping, never part of the LLM output schema: the model must not be asked to
+    # fill (or be allowed to overwrite) the row version or timestamp.
+    version: SkipJsonSchema[int] = Field(default=ENRICHMENT_VERSION, exclude=True)
+    ts: SkipJsonSchema[datetime | None] = Field(
+        default=None, exclude=True, description="when this row was produced"
+    )
 
     @field_validator("tags", mode="after")
     @classmethod
@@ -347,7 +353,10 @@ class Manifest(Base):
     schema_version: int
     pipeline_version: str
     parquet_format: str
-    generated_at: datetime
+    generated_at: datetime = Field(description="observation time of the newest scrape run")
+    exported_at: datetime | None = Field(
+        default=None, description="when these Parquet exports were last written (run or rebuild)"
+    )
     products: int
     offers_total: int
     groups: dict[str, int] = Field(default_factory=dict, description="taxonomy group -> products")
