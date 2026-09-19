@@ -22,6 +22,7 @@ from rapidfuzz import fuzz
 from ..models import Product, RawOffer
 from ..scrapers.docs import rank_datasheet
 from . import names
+from .brands import infer_brand, normalize_brand
 from .categories import assign_group
 from .tags import derive_tags
 
@@ -58,6 +59,10 @@ class Catalog:
     ) -> Catalog:
         cat = cls(redirects=dict(redirects or {}))
         for p in products:
+            # snapshots written before brand hygiene may still carry the shop as "brand"
+            p.brand = normalize_brand(p.brand) or infer_brand(
+                p.canonical_name, *p.raw_names, p.category
+            )
             cat._register(p)
         return cat
 
@@ -129,7 +134,7 @@ class Catalog:
         p = Product(
             id=pid,
             canonical_name=canonical,
-            brand=offer.brand,
+            brand=normalize_brand(offer.brand),
             category=offer.category,
             tags=tags or [],
             extra_metadata={"rule": True} if rule else {},
@@ -173,10 +178,14 @@ class Catalog:
             p.sellers = [*p.sellers, offer.seller]
         p.listings = {**p.listings, offer.listing_key: str(offer.url)}
         self._listings[offer.listing_key] = pid
-        if not p.brand and offer.brand:
-            p.brand = offer.brand
         if not p.category and offer.category:
             p.category = offer.category
+        if not p.brand:
+            # a maker named in the title beats a store "vendor" field, which is often the
+            # shop itself or a placeholder (both are dropped by normalize_brand)
+            p.brand = infer_brand(p.canonical_name, *p.raw_names, p.category) or normalize_brand(
+                offer.brand
+            )
         if not p.image and offer.image:
             p.image = offer.image
         if offer.links and (
@@ -199,20 +208,28 @@ class Catalog:
         keep.sellers = [*keep.sellers, *drop.sellers]
         keep.tags = [*keep.tags, *drop.tags]
         keep.listings = {**drop.listings, **keep.listings}
-        keep.description = keep.description or drop.description
-        keep.canonical_name_ar = keep.canonical_name_ar or drop.canonical_name_ar
-        keep.description_ar = keep.description_ar or drop.description_ar
-        keep.specs_ar = keep.specs_ar or drop.specs_ar
+        # model-written text beats a seller-text summary, whichever side carries it
+        first, second = (drop, keep) if drop.enriched and not keep.enriched else (keep, drop)
+        keep.description = first.description or second.description
+        keep.canonical_name_ar = first.canonical_name_ar or second.canonical_name_ar
+        keep.description_ar = first.description_ar or second.description_ar
+        keep.specs = first.specs or second.specs
+        keep.specs_ar = first.specs_ar if keep.specs == first.specs else second.specs_ar
+        keep.mpn = first.mpn or second.mpn
         keep.image = keep.image or drop.image
         keep.datasheet_url = keep.datasheet_url or drop.datasheet_url
-        keep.mpn = keep.mpn or drop.mpn
-        keep.specs = keep.specs or drop.specs
-        keep.brand = keep.brand or drop.brand
+        keep.brand = normalize_brand(keep.brand) or normalize_brand(drop.brand)
         keep.category = keep.category or drop.category
         keep.enriched = keep.enriched or drop.enriched
         keep.group = keep.group if keep.group and keep.group != "other" else drop.group
+        source = (
+            first.extra_metadata.get("description_source")
+            if first.description
+            else second.extra_metadata.get("description_source")
+        )
         keep.extra_metadata = {
-            **keep.extra_metadata,
+            **{k: v for k, v in keep.extra_metadata.items() if k != "description_source"},
+            **({"description_source": source} if source and not keep.enriched else {}),
             "merged": sorted({*keep.extra_metadata.get("merged", []), drop_id}),
         }
         self.redirects[drop_id] = keep_id

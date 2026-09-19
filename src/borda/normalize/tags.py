@@ -7,6 +7,7 @@ import re
 from typing import TYPE_CHECKING
 
 from . import names
+from .brands import brand_tags
 
 if TYPE_CHECKING:
     from ..models import Product, RawOffer
@@ -118,8 +119,9 @@ _MAX_TAGS = 12
 _BAD_TAG = re.compile(r"^\d+$|^.{0,1}$|^.{31,}$")
 # store-side marketing/navigation tags that say nothing about the product
 _STORE_NOISE = re.compile(
-    r"latest|new-?arrival|best-?sell|featured|offer|sale|discount|deal|hot|top|trending|"
-    r"recommend|home|all-products|uncategori[sz]ed|electronics$|shop|store"
+    r"latest|new-?arrival|newly|arriv|best-?sell|featured|offer|sale|discount|deal|hot|top|"
+    r"trending|recommend|home|all-products|uncategori[sz]ed|electronics$|shop|store|^other$|"
+    r"^(?:for|with|and|the|size|type|new|misc|general|products?|items?|accessories)$"
 )
 
 
@@ -138,6 +140,27 @@ def _norm(tag: str) -> str:
     return re.sub(r"[^a-z0-9+.]+", "-", names.clean(tag)).strip("-")
 
 
+def clean_tags(tags: set[str] | list[str], *, brand: list[str] | None = None) -> list[str]:
+    """Drop seller words, store navigation noise and plural duplicates; keep brand and
+    family/function tags first when the list has to be cut."""
+    brand = brand or []
+    sellers = _seller_words()
+    kept = {
+        t
+        for t in tags
+        if t
+        and not _BAD_TAG.match(t)
+        and not names.has_arabic(t)
+        and t not in sellers
+        and not _STORE_NOISE.search(t)
+    }
+    # "resistors" adds nothing next to "resistor": keep one spelling per tag
+    clean = sorted(t for t in kept if not (t.endswith("s") and t[:-1] in kept))
+    priority = set(_TOKEN_TAGS.values()) | set(brand)
+    clean.sort(key=lambda t: (t not in priority, t))
+    return sorted(clean[:_MAX_TAGS])
+
+
 def derive_tags(product: Product, offer: RawOffer | None = None) -> list[str]:
     tags: set[str] = set(product.tags)
     for tok in names.tokens(names.clean(product.canonical_name)):
@@ -146,25 +169,14 @@ def derive_tags(product: Product, offer: RawOffer | None = None) -> list[str]:
     cat = product.category or (offer.category if offer else None)
     if cat and not names.has_arabic(cat):
         tags.add(_norm(cat))
-    if product.brand and not names.has_arabic(product.brand):
-        tags.add(_norm(product.brand))
+    brand = (
+        brand_tags(product.brand) if product.brand and not names.has_arabic(product.brand) else []
+    )
+    tags.update(brand)
     if offer:
         # store tags are noisy; keep only short, ascii, dictionary-like ones
         for st in offer.store_tags[:10]:
             t = _norm(st)
             if t and " " not in st.strip() and len(t) <= 20 and t not in tags:
                 tags.add(t)
-    sellers = _seller_words()
-    clean = sorted(
-        t
-        for t in tags
-        if t
-        and not _BAD_TAG.match(t)
-        and not names.has_arabic(t)
-        and t not in sellers
-        and not _STORE_NOISE.search(t)
-    )
-    # prefer family/function tags (from the token map) if we have to cut
-    priority = set(_TOKEN_TAGS.values())
-    clean.sort(key=lambda t: (t not in priority, t))
-    return sorted(clean[:_MAX_TAGS])
+    return clean_tags(tags, brand=brand)

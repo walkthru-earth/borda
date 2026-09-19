@@ -110,17 +110,53 @@ Board rules are conservative: ESP32 chipsets, memory and pin variants, USB bridg
 compatible boards, and integrated application boards retain their specific listing names.
 Bare PCBs, shields, cases, expansion boards and relay boards cannot become a generic development
 board just because its name appears in the title. Fuzzy matching also preserves accessory
-nouns, preventing long, nearly identical PCB and assembled-board names from merging. Peripheral
+nouns (including one-word forms such as *ProtoShield*, *holder*, *bracket*, *heatsink*),
+preventing long, nearly identical PCB and assembled-board names from merging. Peripheral
 part numbers embedded in a board title do not turn that board into a standalone GPS or USB
 converter. Arduino and Raspberry Pi rules likewise protect accessories and hardware variants.
-AI renames and merges also reject conflicting accessory identities and explicit hardware
-variants, including contradictory cached answers replayed during an offline reindex.
+
+Part-number rules (`HC-SR04`, `SG90`, `L298N`, `TP4056`, …) only apply when the listing *is*
+that part (`names._same_part`): brackets, holders, adapter boards, controller boards "for" the
+part, kits, multi-packs (`4-in-1`, cascaded), bare chips sold instead of the module (SOP/DIP/
+`IC`) or modules sold instead of the chip, different channel counts, and listings that carry
+another part number (`CS100A … compatible with HC-SR04`, `NRF24L01 … ATMEGA328`) are left as
+their own products. AI renames and merges reject conflicting accessory identities and explicit
+hardware variants – memory, pin count, ESP32 chipset, Arduino revision, **MCU part
+(ATmega168P ≠ ATmega328P), USB bridge (CH340 ≠ FT232), channel count and disjoint part numbers
+(10131N ≠ CD4013)** – including contradictory cached answers replayed during an offline reindex.
 Reindexing applies corrected identities to historical prices by seller/listing ownership while
-preserving old product redirects. Cached embeddings should be retained only when both the
+preserving old product redirects. Ids that already existed keep their slug during a replay (only
+genuinely split or merged products get new ids and redirects), so public URLs, embedding cache
+keys and enrichment cache keys stay stable; the re-keyed cache is persisted at the end. Cached embeddings should be retained only when both the
 product ID and embedded-text hash still match; changed products remain lexically searchable
 until embeddings are regenerated.
 
+## Brands
+
+Store JSON is unreliable about brands: Shopify's `vendor` is usually the shop itself
+("Circuits Electronics", "Future Electronics Egypt"), Wix/WooCommerce use "Other", and the same
+maker is spelled several ways (`BESTON`/`Beston`, `Atmel/Microchip`). `normalize/brands.py`
+keeps `Product.brand` a **manufacturer in its canonical spelling**: seller names (any store of
+the active profile, or a label containing the country name), placeholders, substitute lists
+(`NXP/TI/ST`) and part numbers echoed as brands become `null`; known aliases map to one spelling
+(`BRAND_ALIASES`); SHOUTING unknown brands are title-cased while short acronyms (APC, NXP) stay.
+`infer_brand()` recognises maker names inside titles and store categories (Waveshare, LILYGO/
+TTGO, Seeed Studio/XIAO, Elecrow/CrowPanel, UNI-T, Fluke, …) unless preceded by *for / with /
+compatible*, and never infers widely cloned names (Arduino, Raspberry Pi) from a title alone.
+Precedence: maker named in the title → model answer → store vendor. Brand search tags include
+company aliases (`ttgo` → LILYGO, `seeed` → Seeed Studio) so either spelling finds the product;
+the enrichment prompt asks for the maker in official spelling and never receives a shop as hint.
+Legacy snapshots are cleaned when loaded, so a `reindex`/`rebuild` fixes old brands offline.
+
 ## Descriptions & datasheets
+
+Products the model has not reached yet still get compact information: `normalize/summary.py`
+distils the longest seller text into one or two neutral technical sentences (marketing, first-
+person seller talk, prices and Arabic-only text are dropped) and up to six `Key: value` spec
+highlights from `Key: value` lines and flattened spec tables (pin-outs, package contents and
+application lists are skipped). These rows carry `extra_metadata.description_source = "seller"`
+and are replaced by the model's answer once enriched; the frontend labels them as summarised
+from the seller listing. Summaries are recomputed by every run, `reindex` and `rebuild`.
 
 Seller descriptions come for free from the JSON we already fetch (Shopify `body_html`,
 WooCommerce `description`, PrestaShop `description_short`, Wix `description`) – converted to
@@ -161,6 +197,8 @@ which merges them into one system turn – see
 [pydantic/pydantic-ai#5812](https://github.com/pydantic/pydantic-ai/issues/5812). A wire-level
 regression test asserts the request carries exactly `system, user`.
 
+When identical official names merge two products, the survivor also receives the cache row so an
+offline reindex replays the merge without a new model call.
 Failures are best-effort per batch: a failed batch is logged and its products retried next run;
 after three failures with nothing enriched the run stops calling the model. HTTP 429 pushes the
 pacer back 60 s. Answers that would rename a product across an identity boundary (accessory noun,

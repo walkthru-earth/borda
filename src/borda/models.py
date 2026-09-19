@@ -128,7 +128,18 @@ class RawOffer(Base):
     @classmethod
     def _tags_from_str(cls, v: Any) -> Any:
         if isinstance(v, str):
-            return [t.strip() for t in v.split(",") if t.strip()]
+            v = [t.strip() for t in v.split(",") if t.strip()]
+        if isinstance(v, list):
+            # WooCommerce/Shopify return HTML-escaped names ("Power Supply &amp; Converters")
+            return [html.unescape(t).strip() for t in v if isinstance(t, str) and t.strip()]
+        return v
+
+    @field_validator("category", "brand", "sku", mode="before")
+    @classmethod
+    def _unescape_text(cls, v: Any) -> Any:
+        if isinstance(v, str):
+            v = re.sub(r"\s+", " ", html.unescape(v)).strip()
+            return v or None
         return v
 
     @computed_field  # type: ignore[prop-decorator]

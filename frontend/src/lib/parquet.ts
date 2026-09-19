@@ -55,6 +55,8 @@ export interface Product {
 	sellers: string[];
 	similar: string[];
 	enriched: boolean;
+	/** Manufacturer part number; searchable, optional in older snapshots. */
+	mpn?: string | null;
 }
 export interface ProductDetail extends Product {
 	description: string | null;
@@ -64,6 +66,8 @@ export interface ProductDetail extends Product {
 	mpn: string | null;
 	datasheet_url: string | null;
 	listings: Record<string, string>;
+	/** JSON: `{"description_source": "seller"}` marks a summary distilled from seller text. */
+	extra_metadata?: string | null;
 }
 export interface Listing { product_id: string; listing_key: string; seller: string; url: string; raw_name: string; description: string | null; links: string[] }
 export interface Stats {
@@ -149,7 +153,7 @@ async function readWhole<T>(path: string, columns?: string[], filter?: ParquetQu
 
 // ---------------------------------------------------------------------------- public API
 
-const LIST_COLUMNS = ['id', 'canonical_name', 'canonical_name_ar', 'raw_names', 'tags', 'brand', 'category', 'group', 'image', 'sellers', 'similar', 'enriched'];
+const LIST_COLUMNS = ['id', 'canonical_name', 'canonical_name_ar', 'raw_names', 'tags', 'brand', 'category', 'group', 'image', 'sellers', 'similar', 'enriched', 'mpn'];
 
 export function loadCatalog(): Promise<Product[]> {
 	return readWhole<Product>('catalog.parquet', LIST_COLUMNS);
@@ -157,7 +161,7 @@ export function loadCatalog(): Promise<Product[]> {
 
 export async function loadProductDetail(id: string): Promise<ProductDetail | null> {
 	const rows = await readWhole<Omit<ProductDetail, 'listings'> & { listings: string }>(
-		'catalog.parquet', [...LIST_COLUMNS, 'description', 'description_ar', 'specs', 'specs_ar', 'mpn', 'datasheet_url', 'listings'], { id: { $eq: id } }
+		'catalog.parquet', [...LIST_COLUMNS, 'description', 'description_ar', 'specs', 'specs_ar', 'datasheet_url', 'listings', 'extra_metadata'], { id: { $eq: id } }
 	);
 	const r = rows[0];
 	return r ? { ...r, listings: JSON.parse(r.listings || '{}') as Record<string, string> } : null;

@@ -4,8 +4,10 @@
 
 ## Search and filter contract
 
-The browser builds a lexical index over official names, all seller aliases, brands, categories
-and tags, including cached Arabic product names. Matching folds accents, Arabic diacritics
+The browser builds a lexical index over official names, all seller aliases, brands, manufacturer
+part numbers (`mpn`), categories and tags, including cached Arabic product names. Brands are
+normalised by the pipeline (see [brand hygiene](pipeline.md#brands)), so `waveshare`, `lilygo`
+or `ttgo` find every product of that maker even when only the title mentioned it. Matching folds accents, Arabic diacritics
 and alef variants, and Arabic-Indic digits. A deterministic electronics glossary translates
 common queries such as `اردوينو اونو` and `حساس حرارة` into English search terms, so Arabic
 queries also find English-only listings without an AI download.

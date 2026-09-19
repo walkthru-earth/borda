@@ -313,3 +313,52 @@ async def test_checkpoint_resumes_completed_stores(tmp_path, monkeypatch):
     assert a_route.call_count == 0
     assert {s.seller: s.status.value for s in diag2.stores} == {"shop-a": "ok", "shop-b": "ok"}
     assert not ckpt.dir.exists()
+
+
+@respx.mock
+async def test_reindex_keeps_existing_ids_and_cache_keys_stable(tmp_path, monkeypatch):
+    """A replay must not re-slug products that already exist just because the cached official
+    name differs from the seller name: URLs, embeddings and cache rows stay keyed the same."""
+    from borda.enrich import ai as ai_mod
+    from borda.models import Enrichment
+    from borda.pipeline import reindex
+
+    monkeypatch.setattr("borda.http.settings.max_retries", 0)
+    data = tmp_path / "data"
+    _mock_stores("38000")
+    await run_pipeline(
+        RunOptions(
+            stores=[SHOP.slug, WOO.slug],
+            extra_stores=[SHOP, WOO],
+            ai=False,
+            embeddings=False,
+            data_dir=data,
+            diagnostics_dir=tmp_path / "g",
+            cache_dir=tmp_path / "c",
+            run_id="20250901T000000Z",
+            ts=datetime(2025, 9, 1, tzinfo=UTC),
+        )
+    )
+    store = ParquetStore(data)
+    cat = store.read_catalog()
+    pid = next(p.id for p in cat.products.values() if "sr04" in p.id or "ultrasonic" in p.id)
+    store.write_enrichment(
+        {
+            pid: Enrichment(
+                key=pid,
+                canonical_name="HC-SR04 Ultrasonic Distance Sensor",
+                description="d",
+                tags=["sensor"],
+                brand="Circuits Electronics",  # a shop echoed back is not a brand
+            )
+        },
+        "test",
+        datetime(2025, 9, 1, tzinfo=UTC),
+    )
+    monkeypatch.setattr(ai_mod.settings, "ai_enabled", False)
+    await reindex(data, ai=False, embeddings=False)
+    cat2 = store.read_catalog()
+    p = cat2.products[pid]
+    assert p.canonical_name == "HC-SR04 Ultrasonic Distance Sensor" and p.enriched
+    assert p.brand is None
+    assert pid in store.read_enrichment() and pid not in cat2.redirects

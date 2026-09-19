@@ -227,18 +227,144 @@ def block_key(raw: str) -> str:
     return max(with_digit or toks, key=len)
 
 
+_ACCESSORY_NOUNS = re.compile(
+    r"\b(?:pcb|(?:\w*)shield|case|enclosure|relay|expansion|breakout|holder|bracket|stand|"
+    r"mount|heat ?sink|cover|sticker|carrier)\b"
+)
+
+
+_HEAD_ACCESSORY = re.compile(r"\b(?:holder|bracket|stand|mount(?:ing)?|heat ?sink|carrier)\b")
+_MOUNT_STYLE = re.compile(
+    r"\b(?:panel|pcb|wall|surface|screw|flush|din|rail|chassis|board|top|side|thru|through|"
+    r"tht|smd|smt|vertical|horizontal|right angle|angle|stud|bolt|clip|snap|lug|flange|base|"
+    r"foot|magnetic|adhesive|rack|ceiling|pole|pipe|desk|table)[- ]?mount(?:ed|ing|able)?\b"
+)
+
+
+_INCLUDED = re.compile(
+    r"(?:\b(?:with|w|and|incl|including|includes|plus)\b|\+)(?:\s+[\w.-]+){0,2}\s*$"
+)
+
+
+def accessory_nouns(raw: str, *, strict: bool = True) -> frozenset[str]:
+    """Nouns that make a listing an accessory *for* a part (holder, bracket, heatsink, …).
+
+    Strict (seller wording): only the head noun ("HC-SR04 Sensor Bracket Holder") or a noun
+    in a "… for X" name counts; "panel mount socket" describes how the part is fitted and
+    "motor with mounting bracket" is the motor plus an included accessory. Non-strict
+    (proposed official name): any mention keeps the accessory identity."""
+    cleaned = _MOUNT_STYLE.sub(" ", clean(raw))
+    if not cleaned:
+        return frozenset()
+    for_sale = " for " in f" {cleaned} "
+    found = set()
+    for m in _HEAD_ACCESSORY.finditer(cleaned):
+        if strict and _INCLUDED.search(cleaned[: m.start()]):
+            continue
+        noun = "mount" if m.group(0).startswith("mount") else m.group(0).replace(" ", "")
+        if not strict or for_sale or cleaned.endswith(m.group(0)):
+            found.add(noun)
+    return frozenset(found)
+
+
 def accessory_signature(raw: str) -> frozenset[str]:
-    """Accessory nouns must not disappear merely because long names look similar."""
+    """Accessory nouns must not disappear merely because long names look similar.
+    "ProtoShield" / "ScrewShield" count as shields."""
     return frozenset(
-        re.findall(r"\b(?:pcb|shield|case|enclosure|relay|expansion|breakout)\b", clean(raw))
+        "shield" if m.endswith("shield") else m.replace(" ", "")
+        for m in _ACCESSORY_NOUNS.findall(clean(raw))
     )
+
+
+# Part-like tokens: letters + digits ("mg995", "atmega328p", "24c32", "cs100a"), compared by
+# their longest digit run so ESP-WROOM-32 ~ ESP32 and GY-521 MPU6050 ~ MPU-6050, while
+# 10131N vs CD4013 or ATmega168P vs ATmega328P stay apart. Units, packages, version tags and
+# generic board codes are not part numbers.
+_UNIT_TOKEN = re.compile(
+    r"^\d+(?:\.\d+)?(?:k|m|u|n|p)?(?:ohm|v|vac|vdc|a|ma|mah|ah|w|mw|kw|wh|kwh|hz|khz|mhz|ghz|f|"
+    r"uf|nf|pf|mm|cm|m|km|in|ft|bit|bits|byte|bytes|ch|kb|mb|gb|tb|rpm|dbm|db|deg|kg|g|mg|ms|s|"
+    r"sec|min|h|hr|nm|lm|pa|kpa|mpa|bar|psi|lux|ppm|awg|mil|oz|lb|pin|pins|way|axis|cell|cells|"
+    r"wd|led|leds|pixel|pixels|pcs|pc|set|sets|pack|inch|mp|fps|dpi|kbps|mbps|gbps|baud|bps)$"
+)
+_PACKAGE_TOKEN = re.compile(
+    r"^(?:dip|pdip|sop|sot|soic|tssop|msop|ssop|to|qfn|dfn|lqfp|tqfp|qfp|plcc|bga|sma|smb|smc|"
+    r"do|multiwatt|sip|zip|fc|gy|hw|ky|rm|v|ver|r|rev|gen|mk|type|usb|cat|ip|iso|din|m|x|fr|"
+    r"class|grade|series|gen|level|stage|step|phase|pole|poles|core)-?\d+[a-z0-9]*$"
+)
+
+
+def part_numbers(raw: str) -> frozenset[str]:
+    """Digit cores of part-number-like tokens in a name (see above)."""
+    return _part_numbers(clean(raw))
+
+
+@lru_cache(maxsize=65536)
+def _part_numbers(cleaned: str) -> frozenset[str]:
+    out: set[str] = set()
+    for t in tokens(cleaned):
+        if not re.search(r"\d", t) or not re.search(r"[a-z]", t) or re.search(r"\d+x\d+", t):
+            continue
+        if _UNIT_TOKEN.match(t) or _PACKAGE_TOKEN.match(t) or re.match(r"^\d{1,3}[a-z]$", t):
+            continue  # 10k, 30a, 1s, 2p are values, not part numbers
+        runs = re.findall(r"\d{3,}", t)  # 24C32 / SG90 / ESP12 are too short to be decisive
+        if runs:
+            out.add(max(runs, key=len))
+    return frozenset(out)
+
+
+def foreign_part_numbers(raw: str, canonical: str) -> frozenset[str]:
+    """Part numbers a listing mentions that the canonical product does not."""
+    return part_numbers(raw) - part_numbers(canonical)
+
+
+def _same_part_number(a: str, b: str) -> bool:
+    """74138 ~ 74HC138 ~ 138: one digit core is a suffix of the other."""
+    return a.endswith(b) or b.endswith(a)
+
+
+def part_numbers_conflict(left: list[str], right: list[str]) -> bool:
+    """Two products whose names carry only different part numbers are different things."""
+    a = frozenset().union(*(part_numbers(t) for t in left)) if left else frozenset()
+    b = frozenset().union(*(part_numbers(t) for t in right)) if right else frozenset()
+    return bool(a) and bool(b) and not any(_same_part_number(x, y) for x in a for y in b)
+
+
+_CHANNELS = re.compile(r"\b(\d+)\s*-?\s*(?:ch|channels?)\b")
+_MCU = re.compile(
+    r"\b(atmega\d+\w*|attiny\d+\w*|stm32\w+|rp2040|rp2350|esp32(?:-?[sch]\d|-?p4)?|esp8266|"
+    r"esp8285|pic\d+\w*)\b"
+)
+_USB_BRIDGE = re.compile(r"\b(ch340|ch341|ch9102|cp2102|cp2104|ft232|ftdi|pl2303)\w*")
+
+
+def channel_counts(raw: str) -> frozenset[str]:
+    return frozenset(_CHANNELS.findall(clean(raw)))
+
+
+def mcu_parts(raw: str) -> frozenset[str]:
+    """MCU families named in a title, normalised to family+number (ATmega328P-U -> atmega328,
+    ESP32S3 -> esp32-s3) so package/speed-grade suffixes do not look like different chips."""
+    found = set()
+    for m in _MCU.findall(clean(raw)):
+        if m.startswith("esp32") and len(m) > 5:
+            m = re.sub(r"^esp32-?", "esp32-", m)
+        elif not m.startswith(("esp", "rp", "stm32")):
+            m = re.sub(r"^([a-z]+\d+).*$", r"\1", m)
+        found.add(m)
+    if len(found) > 1:
+        found.discard("esp32")  # a generic ESP32 mention must not erase a known S3/C3 variant
+    return frozenset(found)
+
+
+def usb_bridges(raw: str) -> frozenset[str]:
+    return frozenset("ft232" if m == "ftdi" else m for m in _USB_BRIDGE.findall(clean(raw)))
 
 
 # --------------------------------------------------------------------------- canonical rules
 # (pattern, canonical name, tags[, unless]). First match wins; `unless` is tested against
 # the whole cleaned name so accessories / chips / variants never collapse into the board.
 _BOARD_ACCESSORY = re.compile(
-    r"\b(shield|case|cable|kit|proto|bootloader|atmega|chip|programmed|sticker|holder|enclosure|"
+    r"\b(\w*shield|case|cable|kit|proto|bootloader|atmega|chip|programmed|sticker|holder|enclosure|"
     r"box|cover|mount|acrylic|adapter|connector|screw|jumper|sensor|display|module|expansion|"
     r"terminal|breakout|header|pcb|relay|lcd|tft|work area|diy|power supply|clone kit)\b"
 )
@@ -250,24 +376,33 @@ _ESP32_VARIANT = re.compile(
     r"\b(?:wrover|devkitc|mini|ethernet|lora|camera|uno|lan\d+|n\d+r\d+)|"
     r"\bwroom-?32[deu]\b|\b\d+[- ]*(?:pin|mb|gb)\b|\b(?:cp2102|ch340g?|attendance|access control)\b"
 )
+_RELAY_VARIANT = re.compile(
+    r"\b(?:wireless|wifi|bluetooth|nrf24l01|esp\w*|ssr|solid state|12v|24v|3v|3\.3v|high power|30a)\b"
+)
 CANONICAL_RULES: list[tuple] = [
     (
         re.compile(r"\barduino\s*uno\s*(r3|rev3)?\b"),
         "Arduino Uno R3",
         ("arduino", "avr", "dev-board"),
-        re.compile(_BOARD_ACCESSORY.pattern + r"|\b(r4|wifi|minima|smd|q)\b"),
+        re.compile(_BOARD_ACCESSORY.pattern + r"|\b(r4|wifi|minima|smd|q)\b|\batmega(?!328)\d"),
     ),
     (
         re.compile(r"\barduino\s*mega\s*2560\b"),
         "Arduino Mega 2560",
         ("arduino", "avr", "dev-board"),
-        re.compile(_BOARD_ACCESSORY.pattern + r"|\bpro\b"),
+        re.compile(
+            _BOARD_ACCESSORY.pattern
+            + r"|\b(pro|wifi|esp8266|esp32|bluetooth|adk|mini)\b|\batmega(?!2560)\d"
+        ),
     ),
     (
         re.compile(r"\barduino\s*nano\b"),
         "Arduino Nano V3",
         ("arduino", "avr", "dev-board"),
-        re.compile(_BOARD_ACCESSORY.pattern + r"|\b(every|33|esp32|rp2040|ble|iot)\b"),
+        re.compile(
+            _BOARD_ACCESSORY.pattern
+            + r"|\b(every|33|esp32|rp2040|ble|iot|nrf24l01|rf-nano)\b|\batmega(?!328)\d"
+        ),
     ),
     (re.compile(r"\barduino\s*leonardo\b"), "Arduino Leonardo", ("arduino", "avr", "dev-board")),
     (
@@ -280,6 +415,7 @@ CANONICAL_RULES: list[tuple] = [
         re.compile(r"\bnodemcu\b.*\besp8266\b|\besp8266\b.*\bnodemcu\b"),
         "NodeMCU ESP8266 (ESP-12E)",
         ("esp8266", "wifi", "dev-board"),
+        re.compile(r"\b(?:d1|mini|oled|base|motor|relay|esp-?01|esp-?07|esp-?12f)\b"),
     ),
     (
         re.compile(r"\besp32[- ]?cam\b"),
@@ -427,7 +563,7 @@ CANONICAL_RULES: list[tuple] = [
     (re.compile(r"\bft232rl\b"), "FT232RL USB to TTL Converter", ("usb", "uart", "programmer")),
     (re.compile(r"\bcp2102\b"), "CP2102 USB to TTL Converter", ("usb", "uart", "programmer")),
     (
-        re.compile(r"\bch340g?\b.*\b(usb|ttl)\b"),
+        re.compile(r"(?=.*\bch340[gc]?\b)(?=.*\b(?:usb|ttl|uart)\b)"),
         "CH340 USB to TTL Converter",
         ("usb", "uart", "programmer"),
     ),
@@ -440,26 +576,34 @@ CANONICAL_RULES: list[tuple] = [
     (re.compile(r"\blm2596\b"), "LM2596 Buck Converter Module", ("power", "buck", "dc-dc")),
     (re.compile(r"\bxl6009\b"), "XL6009 Boost Converter Module", ("power", "boost", "dc-dc")),
     (re.compile(r"\bmt3608\b"), "MT3608 Boost Converter Module", ("power", "boost", "dc-dc")),
-    (re.compile(r"\btp4056\b"), "TP4056 Li-ion Charger Module", ("power", "charger", "li-ion")),
+    (
+        re.compile(r"\btp4056\b"),
+        "TP4056 Li-ion Charger Module",
+        ("power", "charger", "li-ion"),
+        re.compile(r"\b(?:step[- ]?up|step[- ]?down|boost|dc-dc|bms|2s|3s|4s)\b"),
+    ),
     (
         re.compile(r"\bams1117\b.*3\.3"),
         "AMS1117-3.3V Regulator Module",
         ("power", "ldo", "regulator"),
     ),
     (
-        re.compile(r"\brelay\b.*\b1\s*ch(annel)?\b.*\b5v\b|\b5v\b.*\b1\s*ch(annel)?\b.*\brelay\b"),
+        re.compile(r"(?=.*\brelay\b)(?=.*\b1[\s-]*ch(?:annel)?\b)(?=.*\b5v\b)"),
         "5V 1-Channel Relay Module",
         ("relay", "switch"),
+        _RELAY_VARIANT,
     ),
     (
-        re.compile(r"\brelay\b.*\b2\s*ch(annel)?\b.*\b5v\b|\b5v\b.*\b2\s*ch(annel)?\b.*\brelay\b"),
+        re.compile(r"(?=.*\brelay\b)(?=.*\b2[\s-]*ch(?:annel)?\b)(?=.*\b5v\b)"),
         "5V 2-Channel Relay Module",
         ("relay", "switch"),
+        _RELAY_VARIANT,
     ),
     (
-        re.compile(r"\brelay\b.*\b4\s*ch(annel)?\b.*\b5v\b|\b5v\b.*\b4\s*ch(annel)?\b.*\brelay\b"),
+        re.compile(r"(?=.*\brelay\b)(?=.*\b4[\s-]*ch(?:annel)?\b)(?=.*\b5v\b)"),
         "5V 4-Channel Relay Module",
         ("relay", "switch"),
+        _RELAY_VARIANT,
     ),
     (re.compile(r"\bmq-?2\b"), "MQ-2 Gas Sensor", ("sensor", "gas")),
     (re.compile(r"\bmq-?135\b"), "MQ-135 Air Quality Sensor", ("sensor", "gas")),
@@ -491,6 +635,19 @@ CANONICAL_RULES: list[tuple] = [
 ]
 
 _ARABIC = re.compile(r"[\u0600-\u06FF]")
+# Listings that only *mention* a well-known part: accessories for it, boards built around it,
+# multi-packs, bare chips sold instead of the module (or the other way round).
+_PART_ACCESSORY = re.compile(
+    r"\b(?:\w*shield|holder|bracket|stand|mount(?:ing)?|heat ?sink|case|enclosure|cover|acrylic|"
+    r"sticker|carrier|expansion|breakout|adapter board|base board|base adapter|controller board|"
+    r"programmer|downloader|without|not included|compatible|replacement|spare|cascaded|"
+    r"\d+[- ]?in[- ]?1|kit|display|lcd|oled|tft|screen|relay)\b"
+)
+_CHIP_PACKAGE = re.compile(
+    r"\b(?:ics?|smd|sop-?\d*|soic|tssop|msop|dip-?\d*|pdip|to-\d+|sot-?\d+|qfn\d*|"
+    r"plcc\d*|multiwatt\d*|bare)\b"
+)
+_ASSEMBLED = re.compile(r"\b(?:module|board|shield|breakout|expansion|kit|without)\b")
 
 
 def has_arabic(s: str) -> bool:
@@ -519,9 +676,42 @@ def canonical_rule(raw: str) -> tuple[str, tuple[str, ...]] | None:
                 and m.start() > board_family.start()
             ):
                 continue
-            if "{0}" not in name:
-                return name, tags
-            groups = [g for g in m.groups() if g and g.isdigit()]
-            if groups:
-                return name.format(groups[0]), tags
+            if "{0}" in name:
+                groups = [g for g in m.groups() if g and g.isdigit()]
+                if not groups:
+                    continue
+                name = name.format(groups[0])
+            if not {"dev-board", "sbc"}.intersection(tags) and not _same_part(c, name):
+                continue
+            return name, tags
     return None
+
+
+def _same_part(cleaned: str, canonical: str) -> bool:
+    """A part-number rule only applies when the listing *is* that part: not an accessory
+    for it, not a board that merely integrates it, not the bare chip when the rule names the
+    module (or vice versa), and not a different channel count."""
+    canon = clean(canonical)
+    canon_tokens = set(tokens(canon))
+    if any(
+        ("shield" if hit.endswith("shield") else hit) not in canon_tokens
+        and hit.replace(" ", "") not in canon_tokens
+        for hit in _PART_ACCESSORY.findall(cleaned)
+    ):
+        return False
+    if _foreign_parts(cleaned, canon):
+        return False
+    chip_rule = bool(_CHIP_PACKAGE.search(canon))
+    if chip_rule and _ASSEMBLED.search(cleaned):
+        return False
+    if not chip_rule and _CHIP_PACKAGE.search(cleaned):
+        return False
+    listing_ch, canon_ch = (
+        frozenset(_CHANNELS.findall(cleaned)),
+        frozenset(_CHANNELS.findall(canon)),
+    )
+    return not (listing_ch and canon_ch and listing_ch.isdisjoint(canon_ch))
+
+
+def _foreign_parts(cleaned: str, canon: str) -> frozenset[str]:
+    return _part_numbers(cleaned) - _part_numbers(canon)

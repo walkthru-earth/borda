@@ -30,6 +30,19 @@ test('single-digit specifications are meaningful and all query terms must match'
   assert.deepEqual(ids(index, '???'), []);
 });
 
+test('brands, brand alias tags and part numbers are searchable', () => {
+  const index = buildIndex([
+    product('tbeam', 'T-Beam ESP32 LoRa Board', { brand: 'LILYGO', tags: ['lilygo', 'ttgo'] }),
+    product('hat', 'USB Monitor AIO 4 Inch', { brand: 'Waveshare' }),
+    product('uno', 'Arduino Uno R3', { mpn: 'A000066' }),
+    product('legacy', 'Old snapshot row without mpn column'),
+  ]);
+  assert.deepEqual(ids(index, 'lilygo'), ['tbeam']);
+  assert.deepEqual(ids(index, 'ttgo'), ['tbeam']);
+  assert.deepEqual(ids(index, 'waveshare'), ['hat']);
+  assert.deepEqual(ids(index, 'a000066'), ['uno']);
+});
+
 test('unlimited results let callers filter the complete catalog', () => {
   const products = Array.from({ length: 5100 }, (_, i) => product(String(i), `Board ${i}`));
   const index = buildIndex(products);

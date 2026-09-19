@@ -1,4 +1,4 @@
-/** Local, deterministic search across official names, seller names and taxonomy. */
+/** Local, deterministic search across official names, seller names, brands, part numbers and taxonomy. */
 import type { CurrentOffer, Product, Stats } from './parquet';
 import { DEFAULT_PROFILE } from './profile.js';
 
@@ -124,7 +124,7 @@ export interface Index {
 export function buildIndex(products: Product[]): Index {
 	const tokens = new Map<string, number[]>();
 	products.forEach((product, i) => {
-		for (const token of tokenize(product.canonical_name, product.canonical_name_ar, product.brand, product.category, product.group, ...product.raw_names, ...product.tags)) {
+		for (const token of tokenize(product.canonical_name, product.canonical_name_ar, product.brand, product.mpn, product.category, product.group, ...product.raw_names, ...product.tags)) {
 			const positions = tokens.get(token);
 			if (positions) positions.push(i);
 			else tokens.set(token, [i]);

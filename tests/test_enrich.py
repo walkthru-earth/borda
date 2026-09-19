@@ -625,3 +625,183 @@ async def test_rate_limiter_gives_concurrent_callers_distinct_slots():
     assert stamps[1] - stamps[0] >= 0.09 and stamps[2] - stamps[1] >= 0.09
     limiter.penalize(5)
     assert limiter._next >= time.monotonic() + 4.5
+
+
+@pytest.mark.parametrize(
+    ("names", "proposed"),
+    [
+        # MCU part and USB bridge are identity: a 168P/CH340 clone is not a 328P/FT232 board
+        (
+            ("Arduino Nano ATmega168P CH340C Mini USB", "Arduino Nano ATmega328P-U FT232"),
+            "Arduino Nano V3",
+        ),
+        # channel counts
+        (("24 Channel PWM Servo Driver Board", "PCA9685 16-Channel PWM Servo Driver"), "PCA9685"),
+        # different part numbers with nothing else in common
+        (("10131N FLIP-FLOP IC DIP-16", "CD4013 Dual D-Type Flip-Flop"), "CD4013"),
+        # accessory suffixes spelled as one word
+        (("Arduino Nano ProtoShield ScrewShield", "Arduino Nano V3"), "Arduino Nano V3"),
+        (("HC-SR04 Ultrasonic Sensor Bracket Holder", "HC-SR04 Ultrasonic Sensor"), "HC-SR04"),
+    ],
+)
+async def test_ai_cannot_merge_mcu_bridge_channel_or_part_number_conflicts(
+    tmp_path, names, proposed
+):
+    from borda.models import Product
+
+    catalog = Catalog.from_products(
+        [
+            Product(id=f"part-{i}", canonical_name=name, raw_names=[name])
+            for i, name in enumerate(names)
+        ]
+    )
+    report = await Enricher(
+        ParquetStore(tmp_path),
+        model=_fake_llm({"part-0": proposed, "part-1": proposed}),
+        requests_per_minute=10_000,
+    ).enrich(catalog)
+    assert len(catalog.products) == 2 and report.merged == 0
+
+
+async def test_renaming_away_from_an_unusual_arduino_mcu_is_rejected(tmp_path):
+    from borda.models import Product
+
+    catalog = Catalog.from_products(
+        [
+            Product(id="nano", canonical_name="Arduino Nano ATmega168P", raw_names=[]),
+            # the usual chip may be dropped from the official name
+            Product(
+                id="uno", canonical_name="Arduino UNO Rev3 compatible ATmega328P", raw_names=[]
+            ),
+            Product(id="mega", canonical_name="Arduino Mega 2560 ATmega2560-16AU", raw_names=[]),
+        ]
+    )
+    report = await Enricher(
+        ParquetStore(tmp_path),
+        model=_fake_llm(
+            {"nano": "Arduino Nano V3", "uno": "Arduino Uno R3", "mega": "Arduino Mega 2560 R3"}
+        ),
+        requests_per_minute=10_000,
+    ).enrich(catalog)
+    assert report.enriched == 2
+    assert catalog.products["nano"].canonical_name == "Arduino Nano ATmega168P"
+    assert catalog.products["uno"].canonical_name == "Arduino Uno R3"
+    assert catalog.products["mega"].canonical_name == "Arduino Mega 2560 R3"
+
+
+@pytest.mark.parametrize(
+    ("source", "proposed"),
+    [
+        # included accessories and fitting styles are not accessory identities
+        (
+            "36GP-555 DC Gear Motor 12V 60RPM with Mounting Bracket",
+            "36GP-555 DC Gear Motor 12V 60RPM",
+        ),
+        ("Banana Plug Female 4mm", "4mm Banana Female Panel Mount Socket"),
+        ("6 Pin Micro SIM Card Push Holder", "Micro SIM Card Push-Push Socket"),
+        # 74HC138-74138 is one part; 3.5" TFT for Uno/Mega2560 is not a Mega
+        ("74HC138-74138 (3 to 8 Line Decoder)", "74HC138 3-to-8 Line Decoder/Demultiplexer"),
+        ("1-Channel Solid State Relay Module (5V) SSR105", "1-Channel SSR Module 5V"),
+        ("1 Output Relay Module Works on 5V Signal (SKU#KIT-M2)", "1-Channel Relay Module 5V"),
+    ],
+)
+async def test_legitimate_official_renames_are_accepted(tmp_path, source, proposed):
+    from borda.models import Product
+
+    catalog = Catalog.from_products([Product(id="p", canonical_name=source, raw_names=[source])])
+    report = await Enricher(
+        ParquetStore(tmp_path), model=_fake_llm({"p": proposed}), requests_per_minute=10_000
+    ).enrich(catalog)
+    assert report.enriched == 1
+    assert next(iter(catalog.products.values())).canonical_name == proposed
+
+
+def _brand_llm(answers: dict[str, dict]):
+    def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        prompt = messages[-1].parts[-1].content
+        keys = [
+            json.loads(line)["key"] for line in str(prompt).splitlines() if line.startswith("{")
+        ]
+        items = [
+            {"key": k, "canonical_name": k, "description": "d", "tags": [], **answers.get(k, {})}
+            for k in keys
+        ]
+        return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, {"items": items})])
+
+    return FunctionModel(respond)
+
+
+async def test_brand_precedence_title_then_model_then_store_vendor(tmp_path, make_offer):
+    catalog = Catalog()
+    ttgo, _ = catalog.resolve(
+        make_offer("circuits-elec", "TTGO T-Display ESP32", brand="Circuits Electronics"),
+        fuzzy_threshold=93,
+    )
+    ph, _ = catalog.resolve(
+        make_offer("circuits-elec", "Analog pH Sensor V2", brand="Circuits Electronics"),
+        fuzzy_threshold=93,
+    )
+    psu, _ = catalog.resolve(
+        make_offer("fut-electronics", "9V 2A Power Adapter", brand="Future Electronics Egypt"),
+        fuzzy_threshold=93,
+    )
+    prompt_brands: list[str | None] = []
+
+    def capture(messages, info):
+        for line in str(messages[-1].parts[-1].content).splitlines():
+            if line.startswith("{"):
+                prompt_brands.append(json.loads(line).get("brand"))
+        return _brand_llm(
+            {
+                ttgo: {"brand": "Espressif"},
+                ph: {"brand": "DFRobot"},
+                psu: {"brand": "Future Electronics Egypt"},
+            }
+        ).function(messages, info)
+
+    report = await Enricher(
+        ParquetStore(tmp_path), model=FunctionModel(capture), requests_per_minute=10_000
+    ).enrich(catalog)
+    assert report.enriched == 3
+    # the shop name is never sent as a brand hint; an inferred maker is
+    assert sorted(b or "" for b in prompt_brands) == ["", "", "LILYGO"]
+    assert catalog.products[ttgo].brand == "LILYGO"  # maker in the title beats the model
+    assert catalog.products[ph].brand == "DFRobot"  # model beats a missing brand
+    assert catalog.products[psu].brand is None  # a shop echoed back is still not a brand
+    assert "lilygo" in catalog.products[ttgo].tags and "ttgo" in catalog.products[ttgo].tags
+
+
+async def test_merge_survivor_gets_a_cache_row_and_model_text_replaces_seller_summary(
+    tmp_path, make_offer
+):
+    store = ParquetStore(tmp_path)
+    catalog = Catalog()
+    a, _ = catalog.resolve(make_offer("s1", "Ultrasonic Sensor HC SR04"), fuzzy_threshold=93)
+    b, _ = catalog.resolve(make_offer("s2", "HC-SR04 sensor ultrasonic"), fuzzy_threshold=93)
+    assert a == b  # canonical rule already unified them; make a second product by hand
+    from borda.models import Product
+
+    catalog = Catalog.from_products(
+        [
+            Product(
+                id="ultrasonic-sensor",
+                canonical_name="Ultrasonic Sensor",
+                raw_names=["Ultrasonic Sensor"],
+                description="Seller says: measures distance with sound.",
+                specs=["Range: 2-400cm"],
+                extra_metadata={"description_source": "seller"},
+            ),
+            Product(id="hc-sr04", canonical_name="HC-SR04 Sensor", raw_names=["HC-SR04 Sensor"]),
+        ]
+    )
+    report = await Enricher(
+        store,
+        model=_fake_llm({"ultrasonic-sensor": "HC-SR04 Sensor", "hc-sr04": "HC-SR04 Sensor"}),
+        requests_per_minute=10_000,
+    ).enrich(catalog)
+    assert report.merged == 1 and list(catalog.products) == ["hc-sr04"]
+    survivor = catalog.products["hc-sr04"]
+    assert survivor.enriched and survivor.description.startswith("desc ")
+    assert "description_source" not in survivor.extra_metadata
+    cache = store.read_enrichment()
+    assert "hc-sr04" in cache and cache["hc-sr04"].canonical_name == "HC-SR04 Sensor"

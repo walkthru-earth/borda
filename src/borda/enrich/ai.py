@@ -43,7 +43,9 @@ from ..config import settings
 from ..models import ENRICHMENT_VERSION, Enrichment, Product, utcnow
 from ..normalize import Catalog, slugify
 from ..normalize import names as _names
+from ..normalize.brands import brand_tags, infer_brand, normalize_brand
 from ..normalize.categories import assign_group
+from ..normalize.tags import clean_tags
 from ..profiles import PublicProfile, default_profile
 from ..storage import ParquetStore
 from ..storage.parquet import read_enrichment_file
@@ -83,7 +85,9 @@ For every input item return exactly one output item with the same `key`.
   Use null only when a faithful Arabic name or description cannot be supplied.
 - mpn: manufacturer part number when identifiable (e.g. "ESP32-WROOM-32", "L298N"), else null.
 - tags: up to 8 lowercase tags for search (family, interface, function, brand).
-- brand: manufacturer if clearly known, else null.
+- brand: the company that makes the product, in its official spelling (e.g. "Waveshare",
+  "LILYGO", "Seeed Studio", "Espressif", "Texas Instruments"). Never a shop, distributor or
+  the `brand` hint when it looks like a store; null for generic unbranded parts and clones.
 - group: one of dev-boards, microcontrollers-ics, sensors, wireless-iot, displays-leds,
   motors-drivers, power, passive-components, semiconductors, connectors-cables, prototyping,
   tools-instruments, 3d-printing-cnc, robotics-kits, other.
@@ -238,12 +242,17 @@ class EnrichReport:
     merges: list[tuple[str, str]] = field(default_factory=list)
 
 
+# The original, symmetric accessory vocabulary (a PCB is never the board and vice versa).
+_CORE_ACCESSORY = re.compile(r"\b(?:pcb|\w*shield|case|enclosure|relay|ssr|expansion|breakout)\b")
+
+
 def _identity_labels(texts: list[str]) -> frozenset[str]:
     labels = set()
     for text in texts:
-        labels.update(_names.accessory_signature(text))
         cleaned = _names.clean(text)
-        if re.search(r"\bkit\b", cleaned) and not re.search(
+        for m in _CORE_ACCESSORY.findall(cleaned):
+            labels.add("shield" if m.endswith("shield") else "relay" if m == "ssr" else m)
+        if re.search(r"(?<!sku )\bkit\b", cleaned) and not re.search(
             r"\b(?:dev|development) kit\b", cleaned
         ):
             labels.add("kit")
@@ -270,17 +279,80 @@ def _explicit_variants(texts: list[str]) -> dict[str, set[str]]:
         if re.search(r"\b(?:arduino|uno)\b", cleaned):
             for value in re.findall(r"\br[34]\b", cleaned):
                 variants.setdefault("arduino-revision", set()).add(value)
+        for key, values in (
+            ("channels", _names.channel_counts(text)),
+            ("mcu", _names.mcu_parts(text)),
+            ("usb-bridge", _names.usb_bridges(text)),
+        ):
+            if values:
+                variants.setdefault(key, set()).update(values)
     chipsets = variants.get("esp32-chipset", set())
     if len(chipsets) > 1:
         chipsets.discard("esp32")  # a generic alias must not erase a known S3/C3 variant
+    mcus = variants.get("mcu", set())
+    if len(mcus) > 1:
+        mcus.discard("esp32")
     return variants
 
 
-def _identities_conflict(left: list[str], right: list[str]) -> bool:
+# Variants a rename may never silently drop: the seller said which one it is.
+_STICKY_VARIANTS = ("memory", "arduino-revision")
+# Sellers name the MCU on Arduino-compatible boards when it is *not* the usual one
+# (Nano with ATmega168P instead of 328P); those renames must keep it.
+_ARDUINO_DEFAULT_MCU = (
+    (re.compile(r"\b(?:uno|nano|pro mini)\b"), "atmega328"),
+    (re.compile(r"\bmega\b"), "atmega2560"),
+    (re.compile(r"\b(?:leonardo|pro micro|micro)\b"), "atmega32u4"),
+)
+
+
+def _unusual_mcu(source_variants: dict[str, set[str]], proposed: str) -> bool:
+    mcus = source_variants.get("mcu", set())
+    cleaned = _names.clean(proposed)
+    if not mcus or not re.search(r"\barduino\b", cleaned):
+        return False
+    for board, default in _ARDUINO_DEFAULT_MCU:
+        if board.search(cleaned):
+            return bool(mcus - {default})
+    return False
+
+
+def _accessory_nouns(texts: list[str], *, strict: bool = True) -> frozenset[str]:
+    if not texts:
+        return frozenset()
+    return frozenset().union(*(_names.accessory_nouns(t, strict=strict) for t in texts))
+
+
+def _reduces(texts: list[str], others: list[str]) -> bool:
+    """True when some name in `others` is just a name in `texts` with words removed."""
+    keys = [set(_names.tokens(_names.match_key(t))) for t in texts]
+    return any(
+        other and other <= key
+        for other in (set(_names.tokens(_names.match_key(o))) for o in others)
+        for key in keys
+    )
+
+
+def _identities_conflict(left: list[str], right: list[str], *, rename: bool = False) -> bool:
+    """`left` is what the sellers call it; `right` the proposed official name (rename) or the
+    other product's names (merge). Accessory nouns (holder, bracket, heatsink, …) may be
+    replaced by a synonym ("SIM holder" -> "SIM socket") but not simply *dropped* so that
+    "HC-SR04 Sensor Bracket Holder" turns into "HC-SR04 Sensor"."""
     if _identity_labels(left) != _identity_labels(right):
         return True
+    if _accessory_nouns(left) - _accessory_nouns(right, strict=False) and _reduces(left, right):
+        return True
+    if (
+        not rename
+        and _accessory_nouns(right) - _accessory_nouns(left, strict=False)
+        and _reduces(right, left)
+    ):
+        return True
     a, b = _explicit_variants(left), _explicit_variants(right)
-    return any(a[key].isdisjoint(b[key]) for key in a.keys() & b.keys())
+    if any(a[key].isdisjoint(b[key]) for key in a.keys() & b.keys()):
+        return True
+    # 10131N vs CD4013: names that carry only different part numbers are different parts
+    return _names.part_numbers_conflict(left, right)
 
 
 class Enricher:
@@ -481,16 +553,21 @@ class Enricher:
         # name already won (or the model confirming our name) must not be rejected just
         # because a seller spelling in `raw_names` mentions e.g. "relay", "PCB" or "1GB".
         renames = _names.clean(proposed_name) != _names.clean(p.canonical_name)
-        conflict = renames and _identities_conflict(source_names, [proposed_name])
+        conflict = renames and _identities_conflict(source_names, [proposed_name], rename=True)
         source_variants, proposed_variants = (
             _explicit_variants(source_names),
             _explicit_variants([proposed_name]),
         )
         if renames and any(
-            key in source_variants and key not in proposed_variants
-            for key in ("memory", "arduino-revision")
+            key in source_variants and key not in proposed_variants for key in _STICKY_VARIANTS
         ):
             conflict = True
+        if (
+            renames
+            and "mcu" not in proposed_variants
+            and _unusual_mcu(source_variants, proposed_name)
+        ):
+            conflict = True  # "Nano ATmega168P" must not become the 328P "Nano V3"
         if (
             renames
             and source_variants.get("esp32-chipset", set()) - {"esp32"}
@@ -512,13 +589,23 @@ class Enricher:
         p.specs = e.specs or p.specs
         p.specs_ar = e.specs_ar if len(e.specs_ar) == len(p.specs) else []
         p.mpn = e.mpn or p.mpn
-        p.brand = p.brand or e.brand
-        p.tags = sorted(set(p.tags) | set(e.tags))
+        # maker named in the title > model answer > store "vendor" (often the shop itself)
+        p.brand = (
+            infer_brand(e.canonical_name, p.canonical_name, *p.raw_names)
+            or normalize_brand(e.brand)
+            or normalize_brand(p.brand)
+        )
+        p.tags = clean_tags(
+            set(p.tags) | set(e.tags) | set(brand_tags(p.brand)), brand=brand_tags(p.brand)
+        )
         ruled = assign_group(name=e.canonical_name, tags=p.tags, store_category=p.category)
         vague = {"other", "prototyping"}
         p.group = e.group if e.group and (e.group not in vague or ruled in vague) else ruled
         p.enriched = True
-        p.extra_metadata = {**p.extra_metadata, "enriched_at": utcnow().isoformat()}
+        p.extra_metadata = {
+            **{k: v for k, v in p.extra_metadata.items() if k != "description_source"},
+            "enriched_at": utcnow().isoformat(),
+        }
         old_name = p.canonical_name
         new_name = e.canonical_name.strip()
         if new_name and _names.clean(new_name) != _names.clean(old_name):
@@ -528,7 +615,10 @@ class Enricher:
                 other = catalog.aliases.get(_names.clean(new_name))
                 if not other or other == p.id or other not in catalog.products:
                     old_id = p.id
-                    new_id = catalog.unique_id(slugify(new_name), _names.clean(new_name))
+                    base = slugify(new_name)
+                    new_id = (
+                        base if base == old_id else catalog.unique_id(base, _names.clean(new_name))
+                    )
                     catalog.rename(old_id, new_id)  # mutates p.id
                     self.cache[new_id] = self.cache.pop(old_id, e)
                     p = catalog.products[new_id]
@@ -538,6 +628,8 @@ class Enricher:
             catalog.merge(other, p.id)
             report.merged += 1
             report.merges.append((p.id, other))
+            # the survivor must replay without a new model call on the next reindex
+            self.cache.setdefault(other, e.model_copy(update={"key": other}))
         else:
             catalog.aliases[_names.clean(p.canonical_name)] = p.id
         return True

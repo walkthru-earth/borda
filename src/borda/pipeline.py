@@ -36,6 +36,7 @@ from .models import (
 )
 from .normalize import Catalog, flag_offers
 from .normalize.categories import assign_group
+from .normalize.summary import summarize
 from .observability import notice, phase
 from .profiles import CountryProfile, load_profile, use_profile
 from .scrapers import Store, build_scraper
@@ -167,6 +168,32 @@ def best_descriptions(listings: dict[str, dict]) -> dict[str, str]:
     return best
 
 
+def apply_seller_summaries(catalog: Catalog, listings: dict[str, dict]) -> int:
+    """Products the model has not described yet get a compact, deterministic summary (one or
+    two neutral sentences + spec highlights) distilled from their longest seller text. The
+    enrichment answer replaces it later; `extra_metadata.description_source` says which."""
+    updated = 0
+    for pid, text in best_descriptions(listings).items():
+        p = catalog.products.get(pid)
+        if p is None or p.enriched:
+            continue
+        if p.description and p.extra_metadata.get("description_source") != "seller":
+            continue  # an older model answer awaiting refresh – keep it
+        summary = summarize(text, p.canonical_name)
+        if not summary:
+            continue
+        if summary.description:
+            p.description = summary.description
+        if summary.specs and (
+            not p.specs or p.extra_metadata.get("description_source") == "seller"
+        ):
+            p.specs = summary.specs
+            p.specs_ar = []
+        p.extra_metadata = {**p.extra_metadata, "description_source": "seller"}
+        updated += 1
+    return updated
+
+
 def dedupe_offers(offers: list[RawOffer], catalog: Catalog) -> tuple[list[OfferRecord], int]:
     """Stable order (seller, url) so ids are deterministic; one record per listing."""
     new_products = 0
@@ -295,6 +322,9 @@ async def _run_pipeline(opts: RunOptions) -> tuple[Diagnostics, int]:
             for row in listings.values():
                 row["product_id"] = catalog.resolve_id(row["product_id"])
 
+    with phase("seller-text summaries"):
+        log.info("seller summaries: %d products", apply_seller_summaries(catalog, listings))
+
     # 4. validate / flag against recent history
     with phase("validate + flag outliers"):
         history = store.read_offers()
@@ -403,6 +433,7 @@ def _rebuild_exports(
     for p in catalog.products.values():
         if not p.group:
             p.group = assign_group(name=p.canonical_name, tags=p.tags, store_category=p.category)
+    apply_seller_summaries(catalog, store.read_listings())
     if embeddings and settings.embeddings_enabled:
         emb = embed_catalog(store, catalog)
         if emb.error:
@@ -481,6 +512,9 @@ async def _reindex(
             log.debug("skip %s: %s", key, exc)
             continue
         catalog.resolve(raw, fuzzy_threshold=settings.fuzzy_threshold)
+    # Ids that already existed keep their slug: a replay must not churn public URLs, cache
+    # keys and embeddings just because the model later chose a different official name.
+    catalog.new_ids -= set(old.products)
     enricher = Enricher(store)
     for start in old.redirects:  # first hop along the redirect chain that has a cache entry
         cur, hops = start, 0
@@ -497,9 +531,13 @@ async def _reindex(
         report.enriched,
         report.merged,
     )
+    if report.cached or report.merged:
+        enricher.save()  # cache rows re-keyed by renames/merges must survive the replay
     catalog.redirects = _rebuild_redirects(old, catalog)
+    listings = update_listings(listings, [], [], catalog)
+    apply_seller_summaries(catalog, listings)
     store.write_catalog(catalog)
-    store.write_listings(update_listings(listings, [], [], catalog))
+    store.write_listings(listings)
     return rebuild_exports(data_dir, embeddings=embeddings, profile=store.profile)
 
 
