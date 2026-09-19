@@ -22,7 +22,11 @@
 Every derived file declares `sorting_columns`, carries column statistics and a page index, and
 keeps row groups small. hyparquet uses those to **prune**: a product's whole price history is
 `filter: {product_id: {$eq}}` → footer (one exact read, size from the manifest) + Bloom filter +
-one ~100 KB row group, whatever the file size. Series/stats are rebuilt from the full offers
+one ~100 KB row group, whatever the file size. **Column order is a read contract**: the
+browser projects `catalog.parquet` (list block `CATALOG_LIST_COLUMNS`, then detail block
+`CATALOG_DETAIL_COLUMNS`) and `stats.parquet` (`STATS_BROWSER_COLUMNS` first, catalog echoes for
+the SEO generator last) with one coalesced range request per row group, so keep each block
+contiguous and add new columns to the block that needs them. Series/stats are rebuilt from the full offers
 history and resolved per *listing* (seller + URL), so merges and splits apply retroactively.
 Outliers (`outlier_high/low`, `implausible_price`) stay in history but are excluded from charts.
 Not used (yet): the Parquet VARIANT type – hyparquet decodes it but pyarrow 25 cannot write it.

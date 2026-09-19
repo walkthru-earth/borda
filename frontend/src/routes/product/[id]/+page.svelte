@@ -70,12 +70,12 @@
 	let loadingOffers = $derived(historicalOffers && loadingSeries);
 	let offersUnavailable = $derived(historicalOffers && seriesError);
 	let unpriced = $derived(historicalOffers ? Object.entries(detail?.listings ?? {}).filter(([, url]) => !latestOffers.some((offer) => offer.url === url)) : []);
-	let similar = $derived((product?.similar ?? []).map((key) => catalog.byId.get(key)).filter((p) => !!p).slice(0, 4));
+	let similar = $derived((detail?.similar ?? []).map((key) => catalog.byId.get(key)).filter((p) => !!p).slice(0, 4));
 	let aka = $derived([...new Set(product?.raw_names ?? [])].filter((name) => name.toLowerCase() !== product?.canonical_name.toLowerCase()));
 	let specs = $derived((locale.language === 'ar' && detail?.specs_ar?.length ? detail.specs_ar : detail?.specs ?? []).map((spec) => { const i = spec.indexOf(':'); return i > 0 ? [spec.slice(0, i).trim(), spec.slice(i + 1).trim()] : [tr('Specification', 'المواصفة'), spec]; }));
 	let docLinks = $derived([...new Set(listings.flatMap((listing) => listing.links ?? []))].filter((url) => validUrl(url) && url !== detail?.datasheet_url).slice(0, 8));
 	let sellerTexts = $derived(listings.filter((listing) => listing.description && listing.description.length > 40).sort((a, b) => (b.description?.length ?? 0) - (a.description?.length ?? 0)));
-	let searchTerm = $derived(detail?.mpn ?? product?.canonical_name ?? '');
+	let searchTerm = $derived(product?.mpn ?? product?.canonical_name ?? '');
 	// `product_view` once per product, after offers are known (so the lowest price is real).
 	let trackedProduct = ''; // plain variable on purpose: reading it must not re-run the effect
 	$effect(() => {
@@ -102,7 +102,7 @@
 		<div class="media">{#if validUrl(product.image) && !imageFailed}<img src={product.image!} alt={productName} onerror={() => imageFailed = true} />{:else}<Package size={70} strokeWidth={1} />{/if}<span class="category">{groupName(product.group)}</span></div>
 		<div class="info"><div class="eyebrow">{product.brand ?? tr("Component spotlight", "تعرف على المكون")}</div><h1 dir="auto">{productName}</h1>{#if locale.language === 'ar' && product.canonical_name_ar}<p class="original-name" dir="ltr">{product.canonical_name}</p>{/if}
 			{#if description}<p class="desc" dir="auto">{description}</p>{#if fromSellerText}<p class="desc-source">{tr('Summarised from the seller listing', 'ملخص من صفحة البائع')}</p>{/if}{:else if loadingDetail}<div class="skeleton" style="height: 3em"></div>{:else}<p class="desc">{tr(`Compare this component across electronics stores in ${market.profile.country_name} and explore its recorded price history.`, `قارن هذا المكون بين متاجر الإلكترونيات في ${market.profile.country_name_ar} وتابع سجل أسعاره.`)}</p>{/if}
-			<div class="product-meta"><span><Store size={15} /> {formatNumber(product.sellers.length)} {product.sellers.length === 1 ? tr("seller", "بائع") : tr("sellers", "بائعين")}</span>{#if detail?.mpn}<span>{tr("Part no.", "رقم القطعة")} <strong dir="ltr">{detail.mpn}</strong></span>{/if}</div>
+			<div class="product-meta"><span><Store size={15} /> {formatNumber(product.sellers.length)} {product.sellers.length === 1 ? tr("seller", "بائع") : tr("sellers", "بائعين")}</span>{#if product.mpn}<span>{tr("Part no.", "رقم القطعة")} <strong dir="ltr">{product.mpn}</strong></span>{/if}</div>
 			<div class="tags">{#each [...new Set(product.tags)] as tag (tag)}<a class="product-tag" href="{base}/?tag={encodeURIComponent(tag)}">{tag}</a>{/each}</div>
 			<div class="docs">{#if validUrl(detail?.datasheet_url)}<a class="doc-link" href={detail!.datasheet_url!} target="_blank" rel="noopener noreferrer nofollow" onclick={() => trackDocumentClick({ product_id: id, kind: 'datasheet', url: detail!.datasheet_url! })}><FileText size={16} /> {tr("View datasheet", "ورقة البيانات")} <ArrowUpRight size={14} /></a>{:else if searchTerm}<a class="doc-link" href="https://www.alldatasheet.com/view.jsp?Searchword={encodeURIComponent(searchTerm)}" target="_blank" rel="noopener noreferrer nofollow" onclick={() => trackDocumentClick({ product_id: id, kind: 'datasheet_search', url: 'https://www.alldatasheet.com/' })}><FileText size={16} /> {tr("Find datasheet", "ابحث عن ورقة البيانات")} <ArrowUpRight size={14} /></a>{/if}</div>
 		</div>

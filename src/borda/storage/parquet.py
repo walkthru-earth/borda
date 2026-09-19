@@ -90,27 +90,57 @@ STORE_RUNS_SCHEMA = pa.schema(
         ("error", pa.string()),
     ]
 )
+# Column order is a read contract with the browser (frontend/src/lib/projection.ts): the list
+# view projects CATALOG_LIST_COLUMNS and the product page CATALOG_DETAIL_COLUMNS, each as one
+# contiguous byte range per row group. Keep each block together; append new columns to the
+# block that needs them (readers select by name, so older snapshots stay compatible).
+CATALOG_LIST_COLUMNS = [
+    "id",
+    "canonical_name",
+    "canonical_name_ar",
+    "raw_names",
+    "tags",
+    "mpn",
+    "brand",
+    "category",
+    "group",
+    "image",
+    "sellers",
+    "enriched",
+]
+CATALOG_DETAIL_COLUMNS = [
+    "similar",
+    "description",
+    "description_ar",
+    "specs",
+    "specs_ar",
+    "datasheet_url",
+    "listings",
+    "extra_metadata",
+]
 CATALOG_SCHEMA = pa.schema(
     [
+        # -- list block: catalog page, search index, product cards
         ("id", pa.string()),
         ("canonical_name", pa.string()),
         ("canonical_name_ar", pa.string()),
         ("raw_names", STR_LIST),
         ("tags", STR_LIST),
-        ("description", pa.string()),
-        ("description_ar", pa.string()),
-        ("specs_ar", STR_LIST),
-        ("specs", STR_LIST),  # "Key: value" highlights from enrichment
         ("mpn", pa.string()),
-        ("datasheet_url", pa.string()),  # only when a seller page links one
-        ("category", pa.string()),
         ("brand", pa.string()),
+        ("category", pa.string()),
+        ("group", pa.string()),  # top-level taxonomy category (see normalize/categories.py)
         ("image", pa.string()),
         ("sellers", STR_LIST),
-        ("listings", pa.string()),  # JSON object: listing_key -> url
-        ("group", pa.string()),  # top-level taxonomy category (see normalize/categories.py)
-        ("similar", STR_LIST),  # nearest neighbours by embedding, best first
         ("enriched", pa.bool_()),
+        # -- detail block: product page only
+        ("similar", STR_LIST),  # nearest neighbours by embedding, best first
+        ("description", pa.string()),
+        ("description_ar", pa.string()),
+        ("specs", STR_LIST),  # "Key: value" highlights from enrichment
+        ("specs_ar", STR_LIST),
+        ("datasheet_url", pa.string()),  # only when a seller page links one
+        ("listings", pa.string()),  # JSON object: listing_key -> url
         ("extra_metadata", pa.string()),  # JSON object
     ],
     metadata={"schema_version": str(SCHEMA_VERSION)},
@@ -126,10 +156,24 @@ SERIES_SCHEMA = pa.schema(
         ("url", pa.string()),
     ]
 )
+# Same contract: the browser projects STATS_BROWSER_COLUMNS (one range per row group); the
+# trailing columns repeat catalog fields for the static SEO generator and offline tooling.
+STATS_BROWSER_COLUMNS = [
+    "product_id",
+    "currency",
+    "min",
+    "max",
+    "median",
+    "latest_min",
+    "latest_ts",
+    "in_stock_sellers",
+    "observations",
+    "current_offers",
+]
 STATS_SCHEMA = pa.schema(
     [
+        # -- browser block
         ("product_id", pa.string()),
-        ("canonical_name", pa.string()),
         ("currency", pa.string()),
         ("min", pa.float64()),
         ("max", pa.float64()),
@@ -137,8 +181,10 @@ STATS_SCHEMA = pa.schema(
         ("latest_min", pa.float64()),
         ("latest_ts", TS),
         ("in_stock_sellers", pa.int32()),
-        ("current_offers", pa.string()),  # JSON listing-level offers for precise browse filters
         ("observations", pa.int32()),
+        ("current_offers", pa.string()),  # JSON listing-level offers for precise browse filters
+        # -- catalog echoes for SEO generation / offline tools
+        ("canonical_name", pa.string()),
         ("sellers", STR_LIST),
         ("tags", STR_LIST),
         ("image", pa.string()),

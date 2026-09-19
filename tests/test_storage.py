@@ -281,3 +281,64 @@ def test_rebuild_manifest_records_export_time_but_keeps_observation_time(tmp_pat
     manifest = json.loads((tmp_path / "manifest.json").read_text())
     assert datetime.fromisoformat(manifest["generated_at"]) == observed
     assert datetime.fromisoformat(manifest["exported_at"]) > observed
+
+
+def _contiguous_runs(meta: pq.FileMetaData, columns: set[str]) -> int:
+    """Byte runs needed per row group to read `columns` (1 == one range request per group)."""
+    runs = 0
+    for i in range(meta.num_row_groups):
+        rg = meta.row_group(i)
+        chunks = sorted(
+            (
+                (c.dictionary_page_offset or c.data_page_offset, c.total_compressed_size)
+                for c in (rg.column(j) for j in range(rg.num_columns))
+                if c.path_in_schema.split(".")[0] in columns
+            ),
+        )
+        end = None
+        for start, size in chunks:
+            if end is None or start != end:
+                runs += 1
+            end = start + size
+    return runs
+
+
+def test_browser_projections_are_one_range_per_row_group(tmp_path, make_offer):
+    """The frontend reads the list / detail / stats projections with one coalesced range per
+    row group (frontend/src/lib/projection.ts); that only holds while each block of columns
+    is written contiguously, in schema order."""
+    from borda.storage.parquet import (
+        CATALOG_DETAIL_COLUMNS,
+        CATALOG_LIST_COLUMNS,
+        CATALOG_SCHEMA,
+        STATS_BROWSER_COLUMNS,
+        STATS_SCHEMA,
+    )
+
+    assert CATALOG_SCHEMA.names == CATALOG_LIST_COLUMNS + CATALOG_DETAIL_COLUMNS
+    assert STATS_SCHEMA.names[: len(STATS_BROWSER_COLUMNS)] == STATS_BROWSER_COLUMNS
+
+    store = ParquetStore(tmp_path)
+    cat = Catalog()
+    ids = [
+        cat.resolve(make_offer("s1", f"Sensor {i:03d}", 10 + i), fuzzy_threshold=100)[0]
+        for i in range(3000)
+    ]
+    store.write_catalog(cat)
+    ts = datetime(2025, 9, 1, tzinfo=UTC)
+    store.write_run(_run("r1", ts, [(pid, "s1", 10.0) for pid in ids]))
+    _, stats = build_series(store.read_offers(), cat)
+    store.write_stats(stats)
+
+    catalog_meta = pq.read_metadata(tmp_path / "catalog.parquet")
+    stats_meta = pq.read_metadata(tmp_path / "stats.parquet")
+    assert catalog_meta.num_row_groups > 1  # 2k-row groups -> the layout is exercised across groups
+    assert _contiguous_runs(catalog_meta, set(CATALOG_LIST_COLUMNS)) == catalog_meta.num_row_groups
+    assert (
+        _contiguous_runs(catalog_meta, set(CATALOG_DETAIL_COLUMNS)) == catalog_meta.num_row_groups
+    )
+    assert _contiguous_runs(stats_meta, set(STATS_BROWSER_COLUMNS)) == stats_meta.num_row_groups
+    # Readers select by name, so an exporter reorder never changes what a row contains.
+    assert set(
+        pq.read_table(tmp_path / "catalog.parquet", columns=["id", "similar"]).column_names
+    ) == {"id", "similar"}

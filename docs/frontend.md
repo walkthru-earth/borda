@@ -64,9 +64,18 @@ independently of product enrichment.
 
 Static SPA, mobile-first, no server, with Lucide icons and a responsive filter sidebar.
 `manifest.json` is fetched with cache revalidation on catalog initialization; every Parquet
-URL is versioned by sha, whole-table files (catalog, stats, embeddings) are fetched once and kept
-in the Cache API, `series.parquet` is read with range requests (exact footer size from the
-manifest, Bloom + statistics pruning). Files are zstd-compressed and decoded with
+URL is versioned by sha. `catalog.parquet` and `stats.parquet` are read with HTTP range
+requests and column projection (`src/lib/projection.ts`): one exact footer read (size from the
+manifest), then one coalesced range per row group covering only the columns the view needs —
+the list page skips the product-page columns (`description`, `specs`, `listings`, `similar`, …)
+and the catalog fields that `stats.parquet` repeats, roughly 2.6 MB instead of 7 MB. The product
+page adds a single range for its row group of detail columns (statistics pruning on the sorted
+`id`). Every range is persisted in the Cache API under the versioned URL and stale versions are
+pruned on manifest load; `series.parquet`/`listings.parquet` use hyparquet's Bloom + statistics
+pruning; `redirects.parquet` and the lazily loaded `embeddings.parquet` are whole-file reads.
+The exporter writes each projection's columns contiguously (`CATALOG_LIST_COLUMNS`,
+`CATALOG_DETAIL_COLUMNS`, `STATS_BROWSER_COLUMNS` in `src/borda/storage/parquet.py`); any other
+order still works, just with more requests. Files are zstd-compressed and decoded with
 [hyparquet-compressors](https://github.com/hyparam/hyparquet-compressors) (also brings WASM snappy). Browse by taxonomy group, tag, seller, stock, price;
 search official names, local/Arabic names and tags with prefix matching; ✨ AI search adds
 meaning-based results; product pages show a touch-friendly SVG price chart per seller,

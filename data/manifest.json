@@ -17,7 +17,7 @@
  "pipeline_version": "0.1.0",
  "parquet_format": "2.6",
  "generated_at": "2026-09-19T16:07:00Z",
- "exported_at": "2026-09-19T20:48:38Z",
+ "exported_at": "2026-09-19T21:14:53Z",
  "products": 20711,
  "offers_total": 116335,
  "groups": {
@@ -39,9 +39,9 @@
  },
  "files": {
   "catalog.parquet": {
-   "sha256": "31849a40bb4b51ad64f05b619743276d138dea8e5f3a3d13124af7fa8fbcf94a",
-   "bytes": 5169893,
-   "footer": 54587,
+   "sha256": "e6059869dc1eaa473f7b54f6434ef957121d0efbce8c5e3d7511d6d3a2a93957",
+   "bytes": 5169888,
+   "footer": 54584,
    "rows": 20711,
    "row_groups": 11
   },
@@ -81,7 +81,7 @@
    "row_groups": 29
   },
   "stats.parquet": {
-   "sha256": "7d945b8a46d546c93ec81a9f9a4545c058dd1d57eb3d3be1f64bf7fc7f72269b",
+   "sha256": "76d362dddda744ae7b8ec8f2ea8d7ac6a8d69f49f2a8e09d016ba0bb952aeaa2",
    "bytes": 1964020,
    "footer": 28709,
    "rows": 20710,
