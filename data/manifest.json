@@ -17,7 +17,7 @@
  "pipeline_version": "0.1.0",
  "parquet_format": "2.6",
  "generated_at": "2026-09-18T21:05:03Z",
- "exported_at": "2026-09-19T20:06:42Z",
+ "exported_at": "2026-09-19T20:44:58Z",
  "products": 20871,
  "offers_total": 93363,
  "groups": {
@@ -39,9 +39,9 @@
  },
  "files": {
   "catalog.parquet": {
-   "sha256": "1eec23729858cde749e77e5e765256c1d35b83d59f322c4c9f0c9d57e0f947bd",
-   "bytes": 4831868,
-   "footer": 54167,
+   "sha256": "3728429fd5e1c7818d5970221c451f2e4b723fddbd97aedc988d600274c96952",
+   "bytes": 4831405,
+   "footer": 54215,
    "rows": 20871,
    "row_groups": 11
   },

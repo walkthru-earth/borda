@@ -24,6 +24,7 @@ import {
 import { compressors } from 'hyparquet-compressors'; // zstd (+ WASM snappy) for the browser
 import { base } from '$app/paths';
 import type { MarketProfile } from './profile.js';
+import { arabicText } from './search';
 
 export const DATA_BASE: string = ((import.meta.env.VITE_DATA_BASE as string | undefined) ?? `${base}/data`).replace(/\/$/, '');
 const CACHE_NAME = 'borda-parquet-v1';
@@ -157,8 +158,15 @@ async function readWhole<T>(path: string, columns?: string[], filter?: ParquetQu
 
 const LIST_COLUMNS = ['id', 'canonical_name', 'canonical_name_ar', 'raw_names', 'tags', 'brand', 'category', 'group', 'image', 'sellers', 'similar', 'enriched', 'mpn'];
 
-export function loadCatalog(): Promise<Product[]> {
-	return readWhole<Product>('catalog.parquet', LIST_COLUMNS);
+/** Older snapshots may carry non-Arabic text in Arabic fields; normalise once at load time. */
+function withArabicFallback<T extends { canonical_name_ar?: string | null; description_ar?: string | null }>(row: T): T {
+	if ('canonical_name_ar' in row) row.canonical_name_ar = arabicText(row.canonical_name_ar);
+	if ('description_ar' in row) row.description_ar = arabicText(row.description_ar);
+	return row;
+}
+
+export async function loadCatalog(): Promise<Product[]> {
+	return (await readWhole<Product>('catalog.parquet', LIST_COLUMNS)).map(withArabicFallback);
 }
 
 export async function loadProductDetail(id: string): Promise<ProductDetail | null> {
@@ -166,7 +174,7 @@ export async function loadProductDetail(id: string): Promise<ProductDetail | nul
 		'catalog.parquet', [...LIST_COLUMNS, 'description', 'description_ar', 'specs', 'specs_ar', 'datasheet_url', 'listings', 'extra_metadata'], { id: { $eq: id } }
 	);
 	const r = rows[0];
-	return r ? { ...r, listings: JSON.parse(r.listings || '{}') as Record<string, string> } : null;
+	return r ? withArabicFallback({ ...r, listings: JSON.parse(r.listings || '{}') as Record<string, string> }) : null;
 }
 
 export async function loadStats(): Promise<Map<string, Stats>> {

@@ -31,6 +31,16 @@ from .taxonomy import Group
 Currency = Annotated[str, StringConstraints(to_upper=True, min_length=3, max_length=3)]
 Price = Annotated[Decimal, Field(gt=0, max_digits=12, decimal_places=2)]
 Slug = Annotated[str, StringConstraints(pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$", max_length=96)]
+_ARABIC_SCRIPT = re.compile(r"[\u0600-\u06ff\u0750-\u077f\u08a0-\u08ff\ufb50-\ufdff\ufe70-\ufeff]")
+
+
+def arabic_text_or_none(value: Any) -> Any:
+    """Arabic translation fields must contain Arabic script. Models sometimes echo the English
+    name (or reorder it) instead of translating; that is not a translation and must fall back
+    to the English text rather than be shown twice in the Arabic interface."""
+    if isinstance(value, str) and not _ARABIC_SCRIPT.search(value):
+        return None
+    return value
 
 
 def utcnow() -> datetime:
@@ -206,6 +216,11 @@ class Product(Base):
     def _dedupe_sorted(cls, v: list[str]) -> list[str]:
         return sorted(set(v))
 
+    @field_validator("canonical_name_ar", "description_ar", mode="before")
+    @classmethod
+    def _arabic_only(cls, v: Any) -> Any:
+        return arabic_text_or_none(v)
+
 
 ENRICHMENT_VERSION = 3  # bump when the prompt/schema changes enough to be worth a refresh
 
@@ -283,6 +298,11 @@ class Enrichment(Base):
         }:
             return None
         return v
+
+    @field_validator("canonical_name_ar", "description_ar", mode="after")
+    @classmethod
+    def _arabic_only(cls, v: str | None) -> str | None:
+        return arabic_text_or_none(v)
 
 
 # --------------------------------------------------------------------------- history

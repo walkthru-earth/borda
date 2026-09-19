@@ -805,3 +805,20 @@ async def test_merge_survivor_gets_a_cache_row_and_model_text_replaces_seller_su
     assert "description_source" not in survivor.extra_metadata
     cache = store.read_enrichment()
     assert "hc-sr04" in cache and cache["hc-sr04"].canonical_name == "HC-SR04 Sensor"
+
+
+def test_arabic_fields_without_arabic_script_fall_back_to_english():
+    from borda.models import Enrichment, Product
+
+    e = Enrichment(
+        key="ups",
+        canonical_name="APC Back-UPS ES BE550-GR 550VA UPS",
+        canonical_name_ar="UPS APC Back-UPS ES BE550-GR 550VA",  # echoed, not translated
+        description="Line-interactive UPS.",
+        description_ar="وحدة UPS تفاعلية 550VA",
+        tags=["ups"],
+    )
+    assert e.canonical_name_ar is None
+    assert e.description_ar == "وحدة UPS تفاعلية 550VA"
+    p = Product(id="dip-adapter", canonical_name="DIP Adapter", canonical_name_ar="DIP Adapter")
+    assert p.canonical_name_ar is None

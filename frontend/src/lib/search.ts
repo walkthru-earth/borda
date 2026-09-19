@@ -84,6 +84,15 @@ function expandArabic(text: string): string {
 	return normalizeSearch(text).replace(glossaryPattern, (phrase) => glossary.get(phrase.replace(/\s+/g, ' '))!);
 }
 
+/**
+ * Arabic translation fields must contain Arabic script; models occasionally echo or reorder the
+ * English name instead. Such values are not translations: return null so the interface falls
+ * back to English instead of showing the same Latin name twice. Mirrors borda.models.
+ */
+export function arabicText(value: string | null | undefined): string | null {
+	return value && /\p{Script=Arabic}/u.test(value) ? value : null;
+}
+
 /** Fold accents, Arabic diacritics / alef variants and Arabic-Indic digits. */
 export function normalizeSearch(text: string): string {
 	return text.toLowerCase().normalize('NFKD')

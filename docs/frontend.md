@@ -29,7 +29,11 @@ The Python Pydantic AI enrichment schema produces `canonical_name_ar`, `descript
 `specs_ar` alongside English content. Its prompt requests faithful Arabic prose while preserving
 brands, part numbers, numeric values and units. Translated specs keep the English order and
 count. Both language versions are persisted in `enrichment.parquet` and `catalog.parquet`;
-no live model request is needed when a visitor switches languages.
+no live model request is needed when a visitor switches languages. `canonical_name_ar` and
+`description_ar` must contain Arabic script: a model answer that merely echoes or reorders the
+English name is stored as `null` (validated on `Enrichment` and `Product`, and again when the
+browser loads the catalog), so the Arabic interface falls back to English instead of showing the
+same Latin name twice.
 
 Enrichment cache version **3** queues older entries for refresh during the normal configured
 AI pipeline, respecting its item limit and rate settings. An offline rebuild does not create

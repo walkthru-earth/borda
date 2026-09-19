@@ -152,8 +152,9 @@ SELECT coalesce(r.new_id,'my-old-id') FROM (SELECT 1) LEFT JOIN read_parquet(get
 - category is raw seller text ("Newly Arrived", "UNI-T"); filter by "group" (15 values) instead.
   brand is a manufacturer (UNI-T, TI, Arduino...), never a shop; 85% NULL – search names/tags too.
 - Text matching: FTS with ignore='[^a-z0-9\p{Arabic}]+' and stemmer='none' (part numbers must not
-  be stemmed). raw_names[] carries seller wording; canonical_name_ar/description_ar are sparse, but
-  Arabic seller titles live in raw_names/listings.raw_name.
+  be stemmed). raw_names[] carries seller wording; canonical_name_ar/description_ar are sparse (and
+  guaranteed to contain Arabic script – otherwise they are NULL, fall back to English). A few English
+  canonical_name values carry Arabic seller qualifiers (ملحومة = soldered, الضيق = narrow): identity info.
 - JSON columns (current_offers, listings, extra_metadata) are VARCHAR: from_json(x,'["json"]') then
   ->> ; cast prices with ::DOUBLE and ts with ::TIMESTAMPTZ.
 - Quote "group" and "similar"; DuckDB lambdas use `lambda x: ...` (old `->` is deprecated).

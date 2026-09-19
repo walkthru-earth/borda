@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildIndex, search, normalizeSearch, productMatchesFilters, matchingPrice } from '../src/lib/search.ts';
+import { buildIndex, search, normalizeSearch, productMatchesFilters, matchingPrice, arabicText } from '../src/lib/search.ts';
 
 const product = (id, canonical_name, extra = {}) => ({ id, canonical_name, raw_names: [], tags: [], brand: null, category: null, group: null, image: null, sellers: ['store-a'], similar: [], enriched: false, ...extra });
 const ids = (index, query, limit) => search(index, query, limit).map((p) => p.id);
@@ -107,4 +107,11 @@ test('persisted Arabic translations are indexed alongside English names', () => 
   const index = buildIndex([product('translated', 'Optical Detector', { canonical_name_ar: 'حساس ضوئي' })]);
   assert.deepEqual(ids(index, 'حساس ضوئي'), ['translated']);
   assert.deepEqual(ids(index, 'optical'), ['translated']);
+});
+
+test('Arabic fields without Arabic script are not translations', () => {
+  assert.equal(arabicText('UPS APC Back-UPS ES BE550-GR 550VA'), null);
+  assert.equal(arabicText(''), null);
+  assert.equal(arabicText(null), null);
+  assert.equal(arabicText('وحدة UPS 550VA'), 'وحدة UPS 550VA');
 });
