@@ -227,6 +227,19 @@ BRAND_TAG_ALIASES: dict[str, tuple[str, ...]] = {
     "Mean Well": ("meanwell",),
 }
 
+# Product-line patterns that identify a maker without naming it. LILYGO boards are sold as
+# "T-<line>" (T-Display, T-Beam, T-SIM7000G, T-A7608SA-H, T-Deck, …); T-nuts, T-bolts and
+# T-type connectors are deliberately not matched.
+BRAND_PATTERNS: dict[str, re.Pattern[str]] = {
+    "LILYGO": re.compile(
+        r"(?<![\w-])t-(?:display|beam|call|deck|watch|dongle|qt|embed|camera|energy|higrow|"
+        r"internet|koala|panel|rgb|twr|zigbee|encoder|impulse|keyboard|lora|motion|wristband|"
+        r"journal|hmi|glass|circle|halow|echo|oi|pcie|eth|can485|u2t|dock|micro32|fpga|simcam|"
+        r"sim\d\w*|a7\d\d\w*|01c3|[3578](?![\d-]))(?![a-z])",
+        re.I,
+    ),
+}
+
 # Brands whose names appear in countless third-party accessories and clones; they are kept
 # when a store or the model states them, but never inferred from a product title alone.
 _NO_INFER = frozenset({"Arduino", "Raspberry Pi"})
@@ -378,6 +391,9 @@ def infer_brand(*texts: str | None) -> str | None:
             hit = canonical_brand(m.group(0))
             if hit and hit not in _NO_INFER:
                 return hit
+        for brand, line in BRAND_PATTERNS.items():
+            if (m := line.search(text)) and not _NOT_MADE_BY.search(text[: m.start()].lower()):
+                return brand
     return None
 
 

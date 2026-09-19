@@ -141,8 +141,10 @@ the active profile, or a label containing the country name), placeholders, subst
 (`NXP/TI/ST`) and part numbers echoed as brands become `null`; known aliases map to one spelling
 (`BRAND_ALIASES`); SHOUTING unknown brands are title-cased while short acronyms (APC, NXP) stay.
 `infer_brand()` recognises maker names inside titles and store categories (Waveshare, LILYGO/
-TTGO, Seeed Studio/XIAO, Elecrow/CrowPanel, UNI-T, Fluke, …) unless preceded by *for / with /
-compatible*, and never infers widely cloned names (Arduino, Raspberry Pi) from a title alone.
+TTGO, Seeed Studio/XIAO, Elecrow/CrowPanel, UNI-T, Fluke, …) and maker product-line patterns
+(`BRAND_PATTERNS`: LILYGO's `T-Display`, `T-SIM7000G`, `T-A7608SA-H` …, but not T-nuts or
+T-type connectors) unless preceded by *for / with / compatible*, and never infers widely
+cloned names (Arduino, Raspberry Pi) from a title alone.
 Precedence: maker named in the title → model answer → store vendor. Brand search tags include
 company aliases (`ttgo` → LILYGO, `seeed` → Seeed Studio) so either spelling finds the product;
 the enrichment prompt asks for the maker in official spelling and never receives a shop as hint.

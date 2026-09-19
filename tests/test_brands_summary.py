@@ -63,6 +63,12 @@ def test_normalize_brand(raw, expected):
         ("Jetson Nano Developer Kit", "NVIDIA"),
         ("UNI-T UT61E Multimeter", "UNI-T"),
         ("HLK-PM01 AC-DC 5V", "Hi-Link"),
+        # LILYGO's T-<line> boards are sold without the maker's name
+        ("T-A7608SA-H ESP32 GPS 4G", "LILYGO"),
+        ("T-SIM7000G ESP32 LoRa GPS", "LILYGO"),
+        ("T-Nut for 2020 V-Slot Aluminum Extrusion", None),
+        ("T-Type Battery Connector - Male", None),
+        ("SMA T-Shape Adapter Female to Dual Female", None),
         # accessories and clones are not made by the brand they fit
         ("Case for Raspberry Pi 5", None),
         ("OLED Display Shield for WEMOS D1 Mini", None),
