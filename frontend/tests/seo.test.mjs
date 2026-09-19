@@ -42,6 +42,23 @@ test('product HTML exposes readable content, canonical and safe metadata without
   assert.ok(!html.includes('<noscript>'));
 });
 
+test('JS-capable browsers hide the static fallback before first paint while no-JS clients keep it', () => {
+  for (const html of [renderProductPage(cleanShell(shell), product, undefined, site), renderHomePage(cleanShell(shell), [product], { groups: { 'dev-boards': 1 }, generated_at: '2026-09-18' }, site), renderNotFoundPage(cleanShell(shell), site)]) {
+    const head = html.slice(0, html.indexOf('</head>'));
+    // The hide rule and the script that toggles it must both run from <head>, before the body is parsed.
+    assert.match(head, /html\.borda-js #borda-static-content\{display:none\}/);
+    assert.match(head, /<script data-borda-static-cleanup>[^]*classList\.add\(hidden\)/);
+    assert.match(head, /getElementById\('main-content'\)/);
+    // Bootstrap failure or stall must reveal the fallback again instead of leaving a blank page.
+    assert.match(head, /setTimeout\(reveal/);
+    assert.match(head, /addEventListener\('unhandledrejection',reveal\)/);
+    assert.equal((html.match(/data-borda-static-cleanup/g) ?? []).length, 1);
+    // The fallback itself stays plain HTML with no inline hiding, so it renders without JavaScript.
+    assert.match(html, /<main id="borda-static-content">/);
+    assert.ok(!html.includes('<main id="borda-static-content" style'));
+  }
+});
+
 test('untrusted product strings cannot break out of HTML or JSON-LD, including replacement metacharacters', () => {
   const dangerous = { ...product, canonical_name: '</script><script>alert(1)</script> $& $\' $`', description: '<img src=x onerror=alert(1)>', image: 'javascript:alert(1)' };
   const html = renderProductPage(cleanShell(shell), dangerous, undefined, site);

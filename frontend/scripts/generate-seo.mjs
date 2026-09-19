@@ -79,10 +79,16 @@ export function cleanShell(shell) {
     .replace(/<link\b(?=[^>]*rel\s*=\s*["']canonical["'])[^>]*>/gi, '');
 }
 
-const fallbackStyle = `<style data-borda-static-seo>#borda-static-content{max-width:1080px;margin:32px auto;padding:28px;color:#172b3a;background:#fff;border:1px solid #e2e8eb;border-radius:18px;font:16px/1.7 system-ui,sans-serif}#borda-static-content h1{font-size:clamp(24px,4vw,38px);line-height:1.3}#borda-static-content a{color:#087f73}#borda-static-content img{max-width:260px;width:100%;height:220px;object-fit:contain}#borda-static-content table{border-collapse:collapse;width:100%;font-size:14px}#borda-static-content th,#borda-static-content td{text-align:start;padding:12px;border-bottom:1px solid #e2e8eb}#borda-static-content .table-wrap{overflow:auto}#borda-static-content .discovery{display:flex;flex-wrap:wrap;gap:8px 24px;list-style:none;padding:0}#borda-static-content .notice{color:#526a75;font-size:14px}@media(max-width:600px){#borda-static-content{margin:12px;padding:20px}}</style>`;
+// `html.borda-js` is set by the head script below before the body is parsed, so JS-capable
+// browsers never paint the plain fallback: they see the app's background (its stylesheet is
+// already linked in <head>) until the Svelte layout mounts. No-JS clients get the full fallback.
+const fallbackStyle = `<style data-borda-static-seo>html.borda-js #borda-static-content{display:none}#borda-static-content{max-width:1080px;margin:32px auto;padding:28px;color:#172b3a;background:#fff;border:1px solid #e2e8eb;border-radius:18px;font:16px/1.7 system-ui,sans-serif}#borda-static-content h1{font-size:clamp(24px,4vw,38px);line-height:1.3}#borda-static-content a{color:#087f73}#borda-static-content img{max-width:260px;width:100%;height:220px;object-fit:contain}#borda-static-content table{border-collapse:collapse;width:100%;font-size:14px}#borda-static-content th,#borda-static-content td{text-align:start;padding:12px;border-bottom:1px solid #e2e8eb}#borda-static-content .table-wrap{overflow:auto}#borda-static-content .discovery{display:flex;flex-wrap:wrap;gap:8px 24px;list-style:none;padding:0}#borda-static-content .notice{color:#526a75;font-size:14px}@media(max-width:600px){#borda-static-content{margin:12px;padding:20px}}</style>`;
 // The fallback is a sibling of the Svelte mount, so client startup never hydrates it.
-// Remove it only after the app actually renders; a failed JS import leaves usable HTML.
-const fallbackCleanup = `<script data-borda-static-cleanup>(()=>{const fallback=document.getElementById('borda-static-content');if(!fallback)return;const cleanup=()=>{if(document.getElementById('main-content')){fallback.remove();observer.disconnect();return true}return false};const observer=new MutationObserver(cleanup);if(!cleanup())observer.observe(document.body,{childList:true,subtree:true})})();</script>`;
+// This inline head script hides it before first paint, removes it once the app renders
+// (`#main-content` appears), and reveals it again if the bootstrap fails or stalls, so a
+// broken JS import still leaves usable HTML. The observer stays alive after a reveal so a
+// late mount still replaces the fallback instead of showing both.
+const fallbackCleanup = `<script data-borda-static-cleanup>(()=>{var root=document.documentElement,hidden='borda-js';root.classList.add(hidden);var observer=new MutationObserver(function(){if(!document.getElementById('main-content'))return;observer.disconnect();clearTimeout(timer);var fallback=document.getElementById('borda-static-content');if(fallback)fallback.remove()});observer.observe(root,{childList:true,subtree:true});var reveal=function(){root.classList.remove(hidden)};var timer=setTimeout(reveal,8000);addEventListener('unhandledrejection',reveal)})();</script>`;
 
 function renderPage(shell, { title, description, canonical, image, schema, body, profile = DEFAULT_PROFILE }) {
   const tags = [
@@ -101,10 +107,10 @@ function renderPage(shell, { title, description, canonical, image, schema, body,
     `<meta data-borda-static-seo name="twitter:title" content="${escapeHtml(title)}">`,
     `<meta data-borda-static-seo name="twitter:description" content="${escapeHtml(description)}">`,
     `<meta data-borda-static-seo name="twitter:image" content="${escapeHtml(image)}">`,
-    `<script data-borda-static-seo type="application/ld+json">${escapeJson(schema)}</script>`, fallbackStyle
+    `<script data-borda-static-seo type="application/ld+json">${escapeJson(schema)}</script>`, fallbackStyle, fallbackCleanup
   ].join('\n');
   return shell.replace('</head>', () => `<!-- borda-static-seo:start -->\n${tags}\n<!-- borda-static-seo:end -->\n</head>`)
-    .replace(/(<body\b[^>]*>)/i, (_, bodyTag) => `${bodyTag}\n<!-- borda-static-content:start --><main id="borda-static-content">${body}</main>${fallbackCleanup}<!-- borda-static-content:end -->`);
+    .replace(/(<body\b[^>]*>)/i, (_, bodyTag) => `${bodyTag}\n<!-- borda-static-content:start --><main id="borda-static-content">${body}</main><!-- borda-static-content:end -->`);
 }
 
 export function renderProductPage(shell, product, stats, siteUrl, relatedProducts = [], profile = DEFAULT_PROFILE) {
@@ -137,10 +143,10 @@ export function renderHomePage(shell, products, manifest, siteUrl) {
 }
 
 export function renderNotFoundPage(shell, siteUrl) {
-  const head = `<title data-borda-static-seo>Page not found · ${escapeHtml(BRAND)}</title><meta data-borda-static-seo name="robots" content="noindex,follow">${fallbackStyle}`;
+  const head = `<title data-borda-static-seo>Page not found · ${escapeHtml(BRAND)}</title><meta data-borda-static-seo name="robots" content="noindex,follow">${fallbackStyle}${fallbackCleanup}`;
   const body = `<h1>Looking for a component?</h1><p>This address is not in the current static catalog. If the product was renamed or merged, the application will try to find its new address.</p><p><a href="${escapeHtml(siteUrl)}/">Search the Borda catalog</a></p>`;
   return shell.replace('</head>', () => `<!-- borda-static-seo:start -->${head}<!-- borda-static-seo:end --></head>`)
-    .replace(/(<body\b[^>]*>)/i, (_, bodyTag) => `${bodyTag}<!-- borda-static-content:start --><main id="borda-static-content">${body}</main>${fallbackCleanup}<!-- borda-static-content:end -->`);
+    .replace(/(<body\b[^>]*>)/i, (_, bodyTag) => `${bodyTag}<!-- borda-static-content:start --><main id="borda-static-content">${body}</main><!-- borda-static-content:end -->`);
 }
 
 export function sitemapFiles(products, siteUrl, generatedAt, limit = 50000) {

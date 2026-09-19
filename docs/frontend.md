@@ -92,7 +92,10 @@ with a readable product overview, specifications, recorded seller offers, relate
 unique title and description, canonical URL, social metadata, and initial-HTML `Product` JSON-LD.
 The homepage includes category links and 20 products for discovery. These pages work without
 JavaScript; when the app mounts, it replaces the static overview with the interactive interface.
-All visitors receive the same HTML. This follows Google's guidance on
+An inline `<head>` script hides the static overview before first paint in JS-capable browsers
+(avoiding a flash of plain text before the app renders), removes it once `#main-content` mounts,
+and reveals it again if the bootstrap rejects or has not mounted within 8 seconds, so a broken
+bundle still leaves usable HTML. All visitors receive the same HTML. This follows Google's guidance on
 [JavaScript SEO](https://developers.google.com/search/docs/crawling-indexing/javascript/javascript-seo-basics)
 and [initial-HTML product markup](https://developers.google.com/search/docs/appearance/structured-data/product-snippet).
 
