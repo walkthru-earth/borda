@@ -38,8 +38,8 @@
  },
  "files": {
   "catalog.parquet": {
-   "sha256": "b4e64c5d5e8ce743dae4af6cb5c7619fc24b158440b08e56972e17606cd2aa34",
-   "bytes": 4831863,
+   "sha256": "1eec23729858cde749e77e5e765256c1d35b83d59f322c4c9f0c9d57e0f947bd",
+   "bytes": 4831868,
    "footer": 54167,
    "rows": 20871,
    "row_groups": 11
@@ -80,8 +80,8 @@
    "row_groups": 23
   },
   "stats.parquet": {
-   "sha256": "2a837a2840a5d21a7e8e9bfcd139ff6d4c012aea1d71a0740b38f52913787fac",
-   "bytes": 1837337,
+   "sha256": "978d95d96064e2a78a9c3cf0bd3dde93cef6d783903ff384313a2e9606032891",
+   "bytes": 1837334,
    "footer": 31308,
    "rows": 20867,
    "row_groups": 11

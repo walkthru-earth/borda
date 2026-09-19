@@ -110,7 +110,7 @@ def test_legacy_snapshot_brands_are_cleaned_on_load():
             Product(id="c", canonical_name="Decade Counter", brand="TEXAS INSTRUMENTS"),
         ]
     )
-    assert cat.products["a"].brand == "Waveshare"
+    assert cat.products["a"].brand == "Waveshare" and "waveshare" in cat.products["a"].tags
     assert cat.products["b"].brand is None
     assert cat.products["c"].brand == "Texas Instruments"
 

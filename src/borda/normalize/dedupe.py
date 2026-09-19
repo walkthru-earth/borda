@@ -22,9 +22,9 @@ from rapidfuzz import fuzz
 from ..models import Product, RawOffer
 from ..scrapers.docs import rank_datasheet
 from . import names
-from .brands import infer_brand, normalize_brand
+from .brands import brand_tags, infer_brand, normalize_brand
 from .categories import assign_group
-from .tags import derive_tags
+from .tags import clean_tags, derive_tags
 
 
 def slugify(s: str, max_len: int = 60) -> str:
@@ -63,6 +63,8 @@ class Catalog:
             p.brand = normalize_brand(p.brand) or infer_brand(
                 p.canonical_name, *p.raw_names, p.category
             )
+            if p.brand and not set(brand_tags(p.brand)) <= set(p.tags):
+                p.tags = clean_tags({*p.tags, *brand_tags(p.brand)}, brand=brand_tags(p.brand))
             cat._register(p)
         return cat
 
