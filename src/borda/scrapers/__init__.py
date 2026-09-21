@@ -5,6 +5,8 @@ from __future__ import annotations
 from ..http import Fetcher
 from .base import BaseScraper, Store
 from .easytest import EasyTestScraper
+from .elghazawy import ElGhazawyScraper
+from .locafy import LocafyScraper
 from .odoo import OdooScraper
 from .prestashop import PrestaShopScraper
 from .shopify import ShopifyScraper
@@ -20,6 +22,8 @@ PLATFORMS: dict[str, type[BaseScraper]] = {
         PrestaShopScraper,
         OdooScraper,
         EasyTestScraper,
+        ElGhazawyScraper,
+        LocafyScraper,
         WixScraper,
     )
 }

@@ -77,6 +77,8 @@ how to publish a selected snapshot. UI translations currently cover English and 
 | ic-hat | PrestaShop | XHR JSON listing | off: temporarily skipped after runner 403 |
 | ram-e-shop | Odoo 17 | HTML cards (schema.org microdata), `?ppg=200` → ~16 pages | on |
 | easytest | custom | HTML `data-et-*` attributes | on |
+| electra | Locafy v2 (Laravel/Livewire) | anonymous `/products` Livewire snapshot + `/livewire/update` (96/page) | on |
+| elghazawy | custom Laravel | HTML cards from `maintenance-tools` and `electricity-connectors` only; all products are embedded in each category response | on |
 | maamoon | Wix | anonymous storefront GraphQL (`/_api/wix-ecommerce-storefront-web/api`, 250/page); sitemap + JSON-LD fallback | on |
 | eshopmas | WooCommerce | – | off: Cloudflare challenge |
 | rsdelivers | Next.js | – | off: prices rendered client-side, >100k SKUs |
@@ -86,7 +88,8 @@ how to publish a selected snapshot. UI translations currently cover English and 
 need merchant-issued credentials; libraries such as `ShopifyAPI`, `wix-python-sdk` or `odoorpc`
 wrap those. For third-party price tracking the anonymous surfaces above are the only ones
 available, and they are JSON where it matters (Shopify `/products.json`, WooCommerce Store API,
-PrestaShop XHR, Wix storefront GraphQL) – Odoo and EasyTest are the only HTML parsers left.
+PrestaShop XHR, Wix storefront GraphQL, and Electra's Livewire update protocol) – Odoo and
+EasyTest are the only HTML card parsers left.
 
 Add a store to the selected profile JSON (`src/borda/profiles/egypt.json` for Egypt). Add a platform:
 subclass `BaseScraper` (yield `RawOffer`) and register it in `scrapers/__init__.py`.

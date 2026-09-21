@@ -91,6 +91,30 @@
       "platform": "easytest"
     },
     {
+      "slug": "electra",
+      "name": "Electra Store",
+      "base_url": "https://electra.store",
+      "platform": "locafy",
+      "params": {
+        "delay_s": 5.0,
+        "per_page": 96
+      },
+      "note": "Custom Locafy v2 Laravel/Livewire storefront; anonymous product-listing snapshots, 96 products/request."
+    },
+    {
+      "slug": "elghazawy",
+      "name": "ElGhazawy",
+      "base_url": "https://elghazawy.com",
+      "platform": "elghazawy",
+      "params": {
+        "categories": [
+          "maintenance-tools",
+          "electricity-connectors"
+        ]
+      },
+      "note": "Custom Laravel HTML; intentionally restricted to the two configured relevant sub-categories."
+    },
+    {
       "slug": "maamoon",
       "name": "Maamoon Est.",
       "base_url": "https://www.maamoon.com",

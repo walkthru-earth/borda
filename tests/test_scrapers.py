@@ -1,5 +1,6 @@
 """Scrapers against mocked HTTP (respx) – no network."""
 
+import html
 import json
 
 import httpx
@@ -133,6 +134,145 @@ async def test_odoo_html_cards(fetcher):
     o = offers[0]
     assert str(o.url) == "https://odoo.test/shop/uno-r3-123"
     assert o.availability == Availability.OUT_OF_STOCK and str(o.price) == "450.00"
+
+
+@respx.mock
+async def test_elghazawy_scrapes_only_configured_categories(fetcher):
+    store = Store(
+        slug="elghazawy",
+        name="ElGhazawy",
+        base_url="https://elghazawy.test",
+        platform="elghazawy",
+        params={"categories": ["maintenance-tools", "electricity-connectors"]},
+    )
+
+    def card(pid, name, price, *, sold=False):
+        label = "Sold Out" if sold else ""
+        return f"""
+        <div class="product_card" id="product-{pid}">
+          <a class="flash-sale-card-wrap-anchor"
+             href="https://elghazawy.test/en/product/{pid}/{name.replace(" ", "+")}">
+            <div class="pro-frame">
+              <img data-src="https://cdn.test/{pid}.webp" />
+              <div class="sale-sold-label">{label}</div>
+              <p>{name}</p><h4>{price} EGP</h4>
+            </div>
+          </a>
+        </div>"""
+
+    maintenance = card("10", "Soldering Iron", "1,250") + card("11", "Crimp Tool", "300")
+    connectors = card("11", "Crimp Tool", "300") + card(
+        "12", "Terminal Connector", "25.50", sold=True
+    )
+    maintenance_route = respx.get("https://elghazawy.test/en/sub-category/maintenance-tools").mock(
+        return_value=httpx.Response(200, text=maintenance)
+    )
+    connectors_route = respx.get(
+        "https://elghazawy.test/en/sub-category/electricity-connectors"
+    ).mock(return_value=httpx.Response(200, text=connectors))
+
+    offers, report = await build_scraper(store, fetcher, max_pages=5).run()
+
+    assert report.status == ScrapeStatus.OK and report.pages == 2 and len(offers) == 3
+    assert maintenance_route.called and connectors_route.called
+    assert str(offers[0].price) == "1250.00"
+    assert offers[0].category == "Maintenance Tools"
+    assert offers[0].store_tags == ["maintenance-tools"]
+    assert offers[0].availability == Availability.UNKNOWN
+    assert offers[2].availability == Availability.OUT_OF_STOCK
+    assert offers[2].extra["source_category"] == "electricity-connectors"
+
+
+@respx.mock
+async def test_elghazawy_requires_an_explicit_category_allowlist(fetcher):
+    store = Store(
+        slug="elghazawy",
+        name="ElGhazawy",
+        base_url="https://elghazawy.test",
+        platform="elghazawy",
+    )
+    offers, report = await build_scraper(store, fetcher, max_pages=5).run()
+    assert offers == [] and report.status == ScrapeStatus.FAILED
+    assert "params.categories" in report.error
+
+
+def _locafy_snapshot(products, *, page=1, more=False):
+    encoded = [[p, {"s": "arr"}] for p in products]
+    return json.dumps(
+        {
+            "data": {
+                "perPage": 24,
+                "page": page,
+                "hasMorePages": more,
+                "loadedProducts": [[encoded, {"s": "arr"}], {"s": "arr"}],
+            },
+            "memo": {"name": "product.product-listing"},
+        },
+        separators=(",", ":"),
+    )
+
+
+@respx.mock
+async def test_locafy_livewire_catalog(fetcher):
+    store = Store(
+        slug="electra",
+        name="Electra",
+        base_url="https://electra.test",
+        platform="locafy",
+        params={"per_page": 96},
+    )
+    first = [
+        {
+            "id": 1,
+            "name": "ESP32 DevKit V1",
+            "slug": "esp32-devkit-v1",
+            "sku": "  ESP-1 ",
+            "price": "350.00",
+            "special_price": "300.00",
+            "image_url": "/storage/esp.jpg",
+            "stock_status": "in_stock",
+        }
+    ]
+    second = first + [
+        {
+            "id": 2,
+            "name": "LM358 DIP",
+            "slug": "lm358-dip",
+            "sku": "LM358",
+            "price": "15.00",
+            "special_price": None,
+            "image_url": "/storage/lm.jpg",
+            "stock_status": "out_of_stock",
+        }
+    ]
+    initial = _locafy_snapshot(first, more=True)
+    page = (
+        f'<div wire:snapshot="{html.escape(initial, quote=True)}"></div>'
+        '<script data-csrf="token"></script>'
+    )
+    respx.get("https://electra.test/products").mock(return_value=httpx.Response(200, text=page))
+    update = respx.post("https://electra.test/livewire/update", headers={"X-Livewire": "true"})
+    update.side_effect = [
+        httpx.Response(
+            200, json={"components": [{"snapshot": _locafy_snapshot(first, more=True)}]}
+        ),
+        httpx.Response(
+            200,
+            json={"components": [{"snapshot": _locafy_snapshot(second, page=2, more=False)}]},
+        ),
+    ]
+
+    offers, report = await build_scraper(store, fetcher, max_pages=5).run()
+
+    assert report.status == ScrapeStatus.OK and report.pages == 2 and len(offers) == 2
+    assert str(offers[0].price) == "300.00"
+    assert offers[0].availability == Availability.IN_STOCK and offers[0].sku == "ESP-1"
+    assert str(offers[0].image) == "https://electra.test/storage/esp.jpg"
+    assert offers[1].availability == Availability.OUT_OF_STOCK
+    assert update.call_count == 2
+    assert update.calls[0].request.read()
+    assert b'"perPage":96' in update.calls[0].request.content
+    assert b'"method":"loadMore"' in update.calls[1].request.content
 
 
 @respx.mock
