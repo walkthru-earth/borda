@@ -16,76 +16,90 @@
  "schema_version": 1,
  "pipeline_version": "0.1.0",
  "parquet_format": "2.6",
- "generated_at": "2026-09-19T16:07:00Z",
- "exported_at": "2026-09-19T21:14:53Z",
- "products": 20711,
- "offers_total": 116335,
+ "generated_at": "2026-09-21T20:59:43Z",
+ "exported_at": "2026-09-21T22:59:20Z",
+ "products": 24058,
+ "offers_total": 143187,
  "groups": {
-  "3d-printing-cnc": 646,
-  "connectors-cables": 1601,
-  "dev-boards": 693,
-  "displays-leds": 877,
-  "microcontrollers-ics": 1082,
-  "motors-drivers": 1366,
-  "other": 1853,
-  "passive-components": 2615,
-  "power": 3113,
-  "prototyping": 743,
-  "robotics-kits": 481,
-  "semiconductors": 1648,
-  "sensors": 1492,
-  "tools-instruments": 2010,
-  "wireless-iot": 491
+  "3d-printing-cnc": 745,
+  "connectors-cables": 1912,
+  "dev-boards": 847,
+  "displays-leds": 993,
+  "microcontrollers-ics": 1117,
+  "motors-drivers": 1513,
+  "other": 2314,
+  "passive-components": 2935,
+  "power": 3585,
+  "prototyping": 838,
+  "robotics-kits": 570,
+  "semiconductors": 1824,
+  "sensors": 1637,
+  "tools-instruments": 2641,
+  "wireless-iot": 587
  },
  "files": {
   "catalog.parquet": {
-   "sha256": "e6059869dc1eaa473f7b54f6434ef957121d0efbce8c5e3d7511d6d3a2a93957",
-   "bytes": 5169888,
-   "footer": 54584,
-   "rows": 20711,
-   "row_groups": 11
+   "sha256": "8801ac8740611ec71ef9167caa2d9cd127d28cd272950c806c2d7ec7fd149b22",
+   "bytes": 6044572,
+   "footer": 63200,
+   "rows": 24058,
+   "row_groups": 12
   },
   "embeddings.parquet": {
-   "sha256": "55021c081162eeaeb5f65e0032a693aa240d0b33165d393b2b5f49d22e2e35b2",
-   "bytes": 5339343,
-   "footer": 8025,
-   "rows": 20711,
+   "sha256": "82b747dda281a8feef6f6524cb5a3fb5fe84e504f8de396b9e9695e65c868b1d",
+   "bytes": 6196517,
+   "footer": 8056,
+   "rows": 24058,
    "row_groups": 6
   },
   "enrichment.parquet": {
-   "sha256": "695f0934186ed4f3bead0ce324def16f98937f814301002aa77bba88479439e9",
-   "bytes": 1059455,
-   "footer": 4707,
-   "rows": 6672,
+   "sha256": "4106c7e1b871cbe148386c16800bada09de2c0106c07876fac3103301534691d",
+   "bytes": 1446257,
+   "footer": 5151,
+   "rows": 8735,
    "row_groups": 1
   },
   "listings.parquet": {
-   "sha256": "e25c05c2a9f64cb53d540e3cbc32465603ba7189e9b346a2671b68c8a3170cfa",
-   "bytes": 7104916,
-   "footer": 64357,
-   "rows": 23476,
-   "row_groups": 23
+   "sha256": "8336ac27a2c0a8e305ad7563d3e7cc34bc01e3876ef2353cf88c92202d13dfcc",
+   "bytes": 7477483,
+   "footer": 79962,
+   "rows": 27725,
+   "row_groups": 28
+  },
+  "offers/year=2026/month=09/20260921T205943Z.parquet": {
+   "sha256": "ff961ed9092306b13af7683cf332895fad7bb6b733fbbdfefb4babee43e56795",
+   "bytes": 1931929,
+   "footer": 10184,
+   "rows": 26852,
+   "row_groups": 4
   },
   "redirects.parquet": {
-   "sha256": "5a9273b5d633b403c24e6fc0e35a2b9a15fb2f21a370b9d278ad6187d6ebc82b",
-   "bytes": 42011,
-   "footer": 734,
-   "rows": 1862,
+   "sha256": "6617e83f53201667be734bf4845d0e36f9bfa5a0871c4bc33dff77c22d394048",
+   "bytes": 71829,
+   "footer": 739,
+   "rows": 2961,
    "row_groups": 1
   },
   "series.parquet": {
-   "sha256": "3c9d6260f09be95821f84bd7457a374d96ca322305728155b8b57160a2c2ecaa",
-   "bytes": 988512,
-   "footer": 31276,
-   "rows": 116284,
-   "row_groups": 29
+   "sha256": "c5197cc603e655d3debdaf83b7f5ddb3965f01080558a7173ad1da440eca31be",
+   "bytes": 1192698,
+   "footer": 37779,
+   "rows": 143128,
+   "row_groups": 35
   },
   "stats.parquet": {
-   "sha256": "76d362dddda744ae7b8ec8f2ea8d7ac6a8d69f49f2a8e09d016ba0bb952aeaa2",
-   "bytes": 1964020,
-   "footer": 28709,
-   "rows": 20710,
-   "row_groups": 11
+   "sha256": "ca2bfd125bd74c3b5891e99ac60cdb32da1928aa99f39fe28fe9cafb60f4d544",
+   "bytes": 2300114,
+   "footer": 31148,
+   "rows": 24056,
+   "row_groups": 12
+  },
+  "store_runs/year=2026/month=09/20260921T205943Z.parquet": {
+   "sha256": "0b328d46b11cac19a5ed892b0871518563586afcebfbedce2919645d6af7ed33",
+   "bytes": 3684,
+   "footer": 1888,
+   "rows": 17,
+   "row_groups": 1
   }
  },
  "runs": [
@@ -138,6 +152,16 @@
    "new_products": 8,
    "stores_ok": 10,
    "stores_failed": 0
+  },
+  {
+   "run_id": "20260921T205943Z",
+   "ts": "2026-09-21T20:59:43Z",
+   "digest": "3fc0504a5f3dced6",
+   "products": 24058,
+   "offers": 26852,
+   "new_products": 3488,
+   "stores_ok": 11,
+   "stores_failed": 1
   }
  ]
 }
