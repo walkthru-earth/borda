@@ -206,8 +206,46 @@ def test_product_image_prefers_sellers_that_allow_hotlinking(make_offer):
     assert str(cat.products[pid].image) == "https://cdn.example/open/lm358.png"
 
 
-def test_hotlink_blocked_sellers_come_from_the_profile():
+def test_image_proxy_rewrites_blocked_hosts_and_still_tracks_the_listing(make_offer):
+    cat = Catalog()
+    cat._image_proxies = {"makers": "https://i0.wp.com/{host}{path}?w=800"}
+    first = make_offer(
+        "makers",
+        "Elecrow Arduino Starter Kit",
+        1200,
+        url="https://makers.example/product/elecrow-kit/",
+        image="https://makers.example/wp-content/uploads/2025/08/kit.jpg?v=2",
+    )
+    pid, _ = cat.resolve(first, fuzzy_threshold=93)
+    proxied = "https://i0.wp.com/makers.example/wp-content/uploads/2025/08/kit.jpg?w=800"
+    assert str(cat.products[pid].image) == proxied
+    # The same listing changing its picture still wins, seen through the proxy.
+    updated = make_offer(
+        "makers",
+        "Elecrow Arduino Starter Kit",
+        1200,
+        url="https://makers.example/product/elecrow-kit/",
+        image="https://makers.example/wp-content/uploads/2026/01/kit-v2.jpg",
+    )
+    assert cat.resolve(updated, fuzzy_threshold=93)[0] == pid
+    assert str(cat.products[pid].image).endswith("/2026/01/kit-v2.jpg?w=800")
+    # Another seller does not displace a proxied (loadable) image.
+    other = make_offer(
+        "s2", "Elecrow Arduino Starter Kit", 1300, image="https://s2.example/kit.png"
+    )
+    assert cat.resolve(other, fuzzy_threshold=93)[0] == pid
+    assert str(cat.products[pid].image).endswith("/2026/01/kit-v2.jpg?w=800")
+    # Sellers without a proxy are untouched.
+    assert cat.public_image(other) == "https://s2.example/kit.png"
+
+
+def test_image_rules_come_from_the_profile():
     from borda.scrapers.stores import BY_SLUG
 
-    assert BY_SLUG["makerselectronics"].params["hotlink_blocked"] is True
-    assert "makerselectronics" in Catalog().hotlink_blocked
+    assert (
+        BY_SLUG["makerselectronics"]
+        .params["image_proxy"]
+        .startswith("https://i0.wp.com/{host}{path}")
+    )
+    assert Catalog().image_proxies["makerselectronics"].startswith("https://i0.wp.com/")
+    assert Catalog().hotlink_blocked == frozenset()

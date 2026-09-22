@@ -114,7 +114,11 @@ throttled or blocked (403), `BORDA_PROXY_URL` routes the scrape through another 
 3. Provenance: every raw name, seller and listing URL is kept on the product. The product
    image is the first one seen, replaced only when the listing that supplied it reports a new
    picture (including a seller that moved domains) or when it sits on a host marked
-   `params.hotlink_blocked` in the profile and another seller offers one.
+   `params.hotlink_blocked` in the profile and another seller offers one. A store with
+   `params.image_proxy` (a template with `{host}` and `{path}`) gets its product images
+   rewritten through that CDN – Makers Electronics is Automattic-hosted and answers hotlinked
+   `<img>` requests with a browser challenge, so its pictures are served via Jetpack Photon
+   (`https://i0.wp.com/{host}{path}?w=800`). Raw offer history keeps the original URLs.
 4. Pydantic AI (`enrich/ai.py`) corrects the name to the manufacturer's original, writes a
    2-3 sentence description, up to 6 spec highlights, MPN, brand, taxonomy group and tags, plus
    Arabic translations of name/description/specs; identical official names are **merged**

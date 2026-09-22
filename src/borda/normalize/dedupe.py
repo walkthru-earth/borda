@@ -54,6 +54,7 @@ class Catalog:
     _keys: dict[str, str] = field(default_factory=dict)  # id -> match_key(canonical)
     _listings: dict[str, str] = field(default_factory=dict)
     _hotlink_blocked: frozenset[str] | None = None  # resolved lazily from the active profile
+    _image_proxies: dict[str, str] | None = None
 
     @classmethod
     def from_products(
@@ -207,18 +208,22 @@ class Catalog:
           seller that moved domains (EasyTest's `easytest.com.eg` -> `easytestgroup.com`,
           whose old image URLs went dark with the old host), or
         * the image sits on a host that blocks hotlinking (`params.hotlink_blocked` on the
-          store) and this seller's does not – a browser can never render the blocked one."""
+          store) and this seller's does not – a browser can never render the blocked one.
+        Stores with `params.image_proxy` get their image URLs rewritten through that CDN
+        template first (raw offers keep the original URL)."""
         if not offer.image:
             return
+        candidate = self.public_image(offer)
         if not p.image:
-            p.image = offer.image
+            p.image = candidate
             return
-        if str(offer.image) == str(p.image):
+        current = str(p.image)
+        if candidate == current:
             return
-        image_host = urlparse(str(p.image)).netloc
+        image_host = self._image_origin_host(current)
         previous_url = p.listings.get(offer.listing_key)
         if previous_url and urlparse(previous_url).netloc == image_host:
-            p.image = offer.image  # same listing, new picture / new domain
+            p.image = candidate  # same listing, new picture / new domain
             return
         blocked = self.hotlink_blocked
         if offer.seller in blocked:
@@ -229,7 +234,27 @@ class Catalog:
             if key.split(":", 1)[0] in blocked
         }
         if image_host in blocked_hosts:
-            p.image = offer.image
+            p.image = candidate
+
+    def public_image(self, offer: RawOffer) -> str:
+        """The image URL a browser can load: the seller's own, or its CDN proxy when the
+        profile sets `params.image_proxy` (a template with `{host}` and `{path}`, e.g.
+        Jetpack Photon `https://i0.wp.com/{host}{path}?w=800` for Automattic-hosted shops
+        whose origin answers hotlinked `<img>` requests with a browser challenge)."""
+        template = self.image_proxies.get(offer.seller)
+        if not template:
+            return str(offer.image)
+        parsed = urlparse(str(offer.image))
+        return template.format(host=parsed.netloc, path=parsed.path)
+
+    def _image_origin_host(self, image: str) -> str:
+        """Host the picture originally came from, seeing through `image_proxy` rewrites
+        (templates must start with a literal prefix followed by `{host}`)."""
+        for template in self.image_proxies.values():
+            prefix = template.split("{", 1)[0]
+            if template.startswith(prefix + "{host}") and image.startswith(prefix):
+                return image[len(prefix) :].split("/", 1)[0]
+        return urlparse(image).netloc
 
     @property
     def hotlink_blocked(self) -> frozenset[str]:
@@ -241,6 +266,17 @@ class Catalog:
                 if s.params.get("hotlink_blocked")
             )
         return self._hotlink_blocked
+
+    @property
+    def image_proxies(self) -> dict[str, str]:
+        """seller -> `params.image_proxy` template (from the profile)."""
+        if self._image_proxies is None:
+            self._image_proxies = {
+                s.slug: str(s.params["image_proxy"])
+                for s in settings.country_profile.configured_stores()
+                if s.params.get("image_proxy")
+            }
+        return self._image_proxies
 
     # ------------------------------------------------------------------ AI unification
     def merge(self, keep_id: str, drop_id: str) -> None:

@@ -92,10 +92,7 @@ with filled dots for recorded in-stock observations, a median annotation and a d
 tooltip; the observations table below it remains the accessible equivalent. Product pages
 hide the cover image below 600 px so the name and price stay above the fold.
 
-Pictures are hotlinked from sellers. A store whose image host refuses cross-site requests
-(Makers Electronics answers `<img>` requests with a JS browser challenge) is marked
-`params.hotlink_blocked` in the profile; the pipeline then prefers another seller's image for
-shared products, and the product page falls back to the category icon when none loads.
+Pictures are hotlinked from sellers. A store whose image host refuses cross-site requests (Makers Electronics answers `<img>` requests with a JS browser challenge) gets `params.image_proxy` in the profile – its pictures are rewritten through the host's own CDN (Jetpack Photon) by the pipeline – or `params.hotlink_blocked`, in which case another seller's image is preferred; the product page falls back to the category icon when none loads.
 
 ```bash
 # Node.js 24 and the packageManager-pinned pnpm version
