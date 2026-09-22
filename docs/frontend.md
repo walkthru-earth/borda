@@ -63,6 +63,13 @@ independently of product enrichment.
 ## Frontend (`frontend/`, SvelteKit · Svelte 5 · Lucide · hyparquet · transformers.js)
 
 Static SPA, mobile-first, no server, with Lucide icons and a responsive filter sidebar.
+Shared catalog UI policy belongs in `src/lib/catalog-config.ts` (sorts, featured groups,
+page size and price presets), while framework-independent query-string updates belong in
+`src/lib/url-state.ts`. Route components own navigation and data orchestration but should use
+those helpers rather than duplicating parsing, omission or encoding rules. New UI should be
+extracted only at cohesive boundaries (for example a complete filter panel), not as many tiny
+one-off components. Keep filtering and pricing rules in the tested domain modules rather than
+reimplementing them in visual components.
 `manifest.json` is fetched with cache revalidation on catalog initialization; every Parquet
 URL is versioned by sha. `catalog.parquet` and `stats.parquet` are read with HTTP range
 requests and column projection (`src/lib/projection.ts`): one exact footer read (size from the

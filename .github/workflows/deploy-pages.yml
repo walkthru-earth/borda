@@ -35,10 +35,16 @@ jobs:
           cache: pnpm
           cache-dependency-path: frontend/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
+      - name: Test
+        run: pnpm test
+      - name: Check
+        run: pnpm run check
       - name: Build
         env:
           # project pages live under /<repo>/
           BASE_PATH: /${{ github.event.repository.name }}
+          SITE_URL: https://walkthru.earth/borda
+          VITE_SITE_ORIGIN: https://walkthru.earth
           # PostHog product analytics (browser SDK). The project key is public by design but is
           # kept as a repository secret so it never appears in logs. Missing → analytics is a no-op.
           PUBLIC_POSTHOG_KEY: ${{ secrets.PUBLIC_POSTHOG_KEY }}

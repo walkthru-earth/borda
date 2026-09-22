@@ -13,6 +13,7 @@
  import { SITE_ORIGIN, safeJsonLd, productSchema } from '$lib/seo';
  import { catalog } from '$lib/data.svelte';
  import { setAnalyticsLanguage, trackLanguageSwitch, trackCatalogError } from '$lib/analytics';
+ import { localUrl, patchSearchParams } from '$lib/url-state';
  let { children } = $props();
  onMount(() => {
   document.querySelectorAll('[data-borda-static-seo]').forEach(node => {
@@ -35,8 +36,7 @@
   trackLanguageSwitch(locale.language, nextLanguage);
   locale.language = nextLanguage;
   try { localStorage.setItem('borda-language', locale.language); } catch { /* Preference still lasts this session. */ }
-  const url = new URL(page.url); url.searchParams.set('lang', locale.language);
-  void goto(`${url.pathname}${url.search}`, { replaceState:true, keepFocus:true, noScroll:true });
+  void goto(localUrl(patchSearchParams(page.url,{ lang:locale.language })), { replaceState:true, keepFocus:true, noScroll:true });
  }
  $effect(() => { void catalog.ensure(); });
  let seoProduct = $derived(catalog.byId.get(page.params.id ?? ''));
@@ -54,12 +54,10 @@
  function submit(value: string, immediate = false) {
   clearTimeout(timer);
   const navigate = () => {
-   const u = new URL(page.url);
-   const onHome = u.pathname === `${base}/` || u.pathname === base;
-   u.pathname = `${base}/`;
-   if (!onHome) u.search = '';
-   if (value.trim()) u.searchParams.set('q', value.trim()); else u.searchParams.delete('q');
-   void goto(`${u.pathname}${u.search}`, { replaceState: onHome, keepFocus: true, noScroll: true });
+   const onHome = page.url.pathname === `${base}/` || page.url.pathname === base;
+   const home = onHome ? page.url : new URL(`${base}/`,page.url.origin);
+   const target = patchSearchParams(home,{ q:value.trim() || null });
+   void goto(localUrl(target), { replaceState: onHome, keepFocus: true, noScroll: true });
   };
   if (immediate) navigate(); else timer = setTimeout(navigate, 220);
  }

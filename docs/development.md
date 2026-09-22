@@ -43,7 +43,8 @@ uv run pytest -q
 cd frontend
 pnpm test
 pnpm run check
-pnpm run build
+BASE_PATH=/borda SITE_URL=https://walkthru.earth/borda \
+  VITE_SITE_ORIGIN=https://walkthru.earth pnpm run build
 ```
 
 Frontend setup, data synchronization and SEO generation commands are documented in

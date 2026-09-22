@@ -12,23 +12,21 @@
  import { fuse, semanticSearch, type Hit, type Progress } from '$lib/semantic';
  import type { Product } from '$lib/parquet';
  import { trackCatalogView, trackAiDiscoveryToggle, trackFiltersReset } from '$lib/analytics';
+ import { CATALOG_PAGE_SIZE, FEATURED_GROUPS, PRICE_PRESETS, parseCatalogSort, parsePositiveNumber } from '$lib/catalog-config';
+ import { localUrl, patchSearchParams, type SearchParamPatch } from '$lib/url-state';
  let q = $derived(page.url.searchParams.get('q') ?? '');
  let group = $derived(page.url.searchParams.get('group') ?? '');
  let tag = $derived(page.url.searchParams.get('tag') ?? '');
  let seller = $derived(page.url.searchParams.get('seller') ?? '');
  let stock = $derived(page.url.searchParams.get('stock') === '1');
- const sorts = ['relevance', 'price-asc', 'price-desc', 'sellers', 'name'];
- let sort = $derived(sorts.includes(page.url.searchParams.get('sort') ?? '') ? page.url.searchParams.get('sort')! : 'relevance');
- function priceParam(key: string) { const n = Number(page.url.searchParams.get(key)); return Number.isFinite(n) && n > 0 ? n : 0; }
- let minPrice = $derived(priceParam('min'));
- let maxPrice = $derived(priceParam('max'));
+ let sort = $derived(parseCatalogSort(page.url.searchParams.get('sort')));
+ let minPrice = $derived(parsePositiveNumber(page.url.searchParams.get('min')));
+ let maxPrice = $derived(parsePositiveNumber(page.url.searchParams.get('max')));
  let semantic = $derived(page.url.searchParams.get('ai') === '1');
  let filtersOpen = $state(false);
  let categoryExpanded = $state(false);
- function setParams(patch: Record<string, string | null>) {
-  const u = new URL(page.url);
-  for (const [k,v] of Object.entries(patch)) v ? u.searchParams.set(k,v) : u.searchParams.delete(k);
-  void goto(`${u.pathname}${u.search}`, { replaceState:true, keepFocus:true, noScroll:true });
+ function setParams(patch: SearchParamPatch) {
+  void goto(localUrl(patchSearchParams(page.url,patch)), { replaceState:true, keepFocus:true, noScroll:true });
  }
  const applyPrice = (min: number, max: number) => setParams({ min:min > 0 ? String(min) : null, max:max > 0 ? String(max) : null });
  function resetFilters() { trackFiltersReset('filters'); setParams({ group:null, tag:null, seller:null, stock:null, min:null, max:null }); }
@@ -61,7 +59,7 @@
   for (const p of queryResults.filter(p => productMatchesFilters(p,catalog.stats.get(p.id),offerFilters))) { const g = p.group ?? 'other'; m.set(g,(m.get(g) ?? 0)+1); }
   return m;
  });
- let categoryOptions = $derived(catalog.groups.filter(([g]) => (categoryCounts.get(g) ?? 0) > 0 || g === group).sort(([a],[b]) => (q || seller || stock || minPrice || maxPrice) ? (categoryCounts.get(b) ?? 0)-(categoryCounts.get(a) ?? 0) : (featuredGroups.indexOf(a) < 0 ? 99 : featuredGroups.indexOf(a))-(featuredGroups.indexOf(b) < 0 ? 99 : featuredGroups.indexOf(b))));
+ let categoryOptions = $derived(catalog.groups.filter(([g]) => (categoryCounts.get(g) ?? 0) > 0 || g === group).sort(([a],[b]) => (q || seller || stock || minPrice || maxPrice) ? (categoryCounts.get(b) ?? 0)-(categoryCounts.get(a) ?? 0) : (FEATURED_GROUPS.indexOf(a as typeof FEATURED_GROUPS[number]) < 0 ? 99 : FEATURED_GROUPS.indexOf(a as typeof FEATURED_GROUPS[number]))-(FEATURED_GROUPS.indexOf(b as typeof FEATURED_GROUPS[number]) < 0 ? 99 : FEATURED_GROUPS.indexOf(b as typeof FEATURED_GROUPS[number]))));
  let results = $derived.by(() => {
   let list = queryResults.filter(p => (!group || (p.group ?? 'other') === group) && (!tag || p.tags.includes(tag)) && productMatchesFilters(p,catalog.stats.get(p.id),offerFilters));
   const price = (p: Product) => matchingPrice(catalog.stats.get(p.id),offerFilters);
@@ -76,8 +74,8 @@
   else if (!q) list = [...list].sort((a,b) => Number((catalog.stats.get(b.id)?.in_stock_sellers ?? 0)>0)-Number((catalog.stats.get(a.id)?.in_stock_sellers ?? 0)>0) || b.sellers.length-a.sellers.length || Number(!!b.image)-Number(!!a.image) || a.canonical_name.localeCompare(b.canonical_name));
   return list;
  });
- let limit = $state(24);
- $effect(() => { void [q,group,tag,seller,stock,sort,minPrice,maxPrice,semantic]; limit = 24; });
+ let limit = $state(CATALOG_PAGE_SIZE);
+ $effect(() => { void [q,group,tag,seller,stock,sort,minPrice,maxPrice,semantic]; limit = CATALOG_PAGE_SIZE; });
  // One `catalog_view` per settled state (typing and filter clicks are debounced), with the
  // result count – this is the search/filter leg of the journey funnel.
  $effect(() => {
@@ -94,7 +92,7 @@
   const observer = new IntersectionObserver((entries) => {
    if (!entries.some((entry) => entry.isIntersecting) || loadPending || shown.length >= results.length) return;
    loadPending = true;
-   limit += 24;
+   limit += CATALOG_PAGE_SIZE;
    window.setTimeout(() => {
     loadPending = false;
     if (loadMoreSentinel) {
@@ -133,7 +131,6 @@
   for (const p of queryResults.filter(p => productMatchesFilters(p,catalog.stats.get(p.id),offerFilters))) if (!group || (p.group ?? 'other') === group) for (const t of p.tags) m.set(t,(m.get(t) ?? 0)+1);
   return [...m.entries()].sort((a,b) => b[1]-a[1]).slice(0,8);
  });
- const featuredGroups = ['dev-boards','sensors','wireless-iot','motors-drivers','power','tools-instruments'];
 </script>
 
 <svelte:head><title>{q ? `${q} · ` : ''}{tr(`Borda — Electronic components in ${market.profile.country_name}`,`بوردة — مكونات الإلكترونيات في ${market.profile.country_name_ar}`)}</title></svelte:head>
@@ -143,14 +140,14 @@
  <div class="hero-art" aria-hidden="true"><div class="orbit orbit-one"></div><div class="orbit orbit-two"></div><div class="floating sensor"><Radio size={26}/><span>SENSORS</span></div><div class="board"><div class="board-top"><span>MADE TO BUILD</span><span>01</span></div><div class="board-traces"><div class="chip-core"><Cpu size={53} strokeWidth={1}/></div><div class="trace-line"></div><div class="board-led"></div></div><div class="board-bottom"><CircuitBoard size={20}/><span>IDEA → REALITY</span></div><div class="pins"></div></div><div class="floating power"><Zap size={24}/><span>POWER YOUR IDEAS</span></div><div class="found"><span><Check size={13}/></span> Your next project starts here</div></div>
 </section>
 
-<nav class="quick-categories scroll-x" aria-label={tr('Popular categories','الفئات الشائعة')}><button class:on={!group} aria-pressed={!group} onclick={() => setParams({group:null,tag:null})}><CategoryIcon/>{tr('All components','كل المكونات')}</button>{#each featuredGroups as g}<button class:on={group===g} aria-pressed={group===g} onclick={() => setParams({group:group===g ? null : g,tag:null})}><CategoryIcon group={g}/>{groupLabel(g)}</button>{/each}</nav>
+<nav class="quick-categories scroll-x" aria-label={tr('Popular categories','الفئات الشائعة')}><button class:on={!group} aria-pressed={!group} onclick={() => setParams({group:null,tag:null})}><CategoryIcon/>{tr('All components','كل المكونات')}</button>{#each FEATURED_GROUPS as g}<button class:on={group===g} aria-pressed={group===g} onclick={() => setParams({group:group===g ? null : g,tag:null})}><CategoryIcon group={g}/>{groupLabel(g)}</button>{/each}</nav>
 
 <div class="catalog-layout">
  <aside class:expanded={filtersOpen} id="catalog-filters" aria-label={tr('Filter components','فلترة المكونات')}>
   <div class="filter-heading"><h2><SlidersHorizontal size={17}/> {tr('Filters','الفلاتر')} {#if activeFilters}<span class="filter-count">{activeFilters}</span>{/if}</h2><button class="reset" onclick={resetFilters} disabled={!activeFilters}>{tr('Reset','مسح')}</button></div>
   <section class="filter-section"><h3>{tr('Category','الفئة')}</h3><div class="category-list"><button class:chosen={!group} aria-pressed={!group} onclick={() => setParams({group:null,tag:null})}><span><CategoryIcon size={16}/> {tr('All components','كل المكونات')}</span><small>{formatNumber([...categoryCounts.values()].reduce((a,b) => a+b,0))}</small></button>{#each (categoryExpanded ? categoryOptions : categoryOptions.slice(0,8)) as [g]}<button class:chosen={group===g} aria-pressed={group===g} onclick={() => setParams({group:group===g ? null : g,tag:null})}><span><CategoryIcon group={g} size={16}/>{groupLabel(g)}</span><small>{formatNumber(categoryCounts.get(g) ?? 0)}</small></button>{/each}</div>{#if categoryOptions.length>8}<button class="text-action" onclick={() => categoryExpanded = !categoryExpanded}>{categoryExpanded ? tr('Show fewer categories','فئات أقل') : tr(`All ${categoryOptions.length} categories`,`كل الفئات (${categoryOptions.length})`)}<ChevronDown size={14} class={categoryExpanded ? 'rotate' : ''}/></button>{/if}</section>
   <section class="filter-section"><h3>{tr('Availability','التوفر')}</h3><label class="stock-check"><input type="checkbox" checked={stock} onchange={e => setParams({stock:e.currentTarget.checked ? '1' : null})}/><span>{tr('In stock only','المتوفر فقط')}<small>{tr('At the latest store check','حسب آخر رصد للمحل')}</small></span><span class="status-dot"></span></label></section>
-  <section class="filter-section"><h3>{tr('Price range','نطاق السعر')} <span>{currencyLabel()}</span></h3><PriceRangeFilter prices={priceDistribution} min={minPrice} max={maxPrice} onapply={applyPrice} /><div class="price-presets">{#each [100,500,1000] as n}<button class:chosen={maxPrice===n && !minPrice} onclick={() => setParams({min:null,max:String(n)})}>{tr('Under','أقل من')} {formatNumber(n)}</button>{/each}</div></section>
+  <section class="filter-section"><h3>{tr('Price range','نطاق السعر')} <span>{currencyLabel()}</span></h3><PriceRangeFilter prices={priceDistribution} min={minPrice} max={maxPrice} onapply={applyPrice} /><div class="price-presets">{#each PRICE_PRESETS as n}<button class:chosen={maxPrice===n && !minPrice} onclick={() => setParams({min:null,max:String(n)})}>{tr('Under','أقل من')} {formatNumber(n)}</button>{/each}</div></section>
   <section class="filter-section"><label class="field seller-field"><span>{tr('Store','المحل')}</span><select value={seller} onchange={e => setParams({seller:e.currentTarget.value || null})}><option value="">{tr(`All stores in ${market.profile.country_name}`,`كل المحلات في ${market.profile.country_name_ar}`)}</option>{#each catalog.sellers as s}<option value={s}>{sellerName(s)}</option>{/each}</select></label></section>
   <div class="filter-tip"><Info size={16}/><p>{tr('Compare before you build. Prices and stock reflect the latest recorded store check.','قارن قبل ما تبدأ. الأسعار والتوفر حسب آخر رصد لكل محل.')}</p></div>
   <button class="btn primary mobile-done" onclick={() => { filtersOpen = false; document.getElementById('results-heading')?.scrollIntoView({block:'center'}); }}>{tr('Show','عرض')} {formatNumber(results.length)} {tr('results','نتيجة')}<ArrowRight size={15}/></button>
