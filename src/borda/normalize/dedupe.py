@@ -19,6 +19,7 @@ from urllib.parse import urlparse
 
 from rapidfuzz import fuzz
 
+from ..config import settings
 from ..models import Product, RawOffer
 from ..scrapers.docs import rank_datasheet
 from . import names
@@ -52,6 +53,7 @@ class Catalog:
     _blocks: dict[str, set[str]] = field(default_factory=lambda: defaultdict(set))
     _keys: dict[str, str] = field(default_factory=dict)  # id -> match_key(canonical)
     _listings: dict[str, str] = field(default_factory=dict)
+    _hotlink_blocked: frozenset[str] | None = None  # resolved lazily from the active profile
 
     @classmethod
     def from_products(
@@ -178,6 +180,7 @@ class Catalog:
             p.raw_names = [*p.raw_names, offer.raw_name]
         if offer.seller not in p.sellers:
             p.sellers = [*p.sellers, offer.seller]
+        self._choose_image(p, offer)  # before the listing URL below is overwritten
         p.listings = {**p.listings, offer.listing_key: str(offer.url)}
         self._listings[offer.listing_key] = pid
         if not p.category and offer.category:
@@ -188,8 +191,6 @@ class Catalog:
             p.brand = infer_brand(p.canonical_name, *p.raw_names, p.category) or normalize_brand(
                 offer.brand
             )
-        if not p.image and offer.image:
-            p.image = offer.image
         if offer.links and (
             ds := rank_datasheet(
                 [*offer.links, *([str(p.datasheet_url)] if p.datasheet_url else [])]
@@ -199,6 +200,47 @@ class Catalog:
         if not p.enriched:
             p.tags = derive_tags(p, offer)
             p.group = assign_group(name=p.canonical_name, tags=p.tags, store_category=p.category)
+
+    def _choose_image(self, p: Product, offer: RawOffer) -> None:
+        """Keep the first image a product gets, except when
+        * the listing that supplied it reports a different image – a refreshed picture, or a
+          seller that moved domains (EasyTest's `easytest.com.eg` -> `easytestgroup.com`,
+          whose old image URLs went dark with the old host), or
+        * the image sits on a host that blocks hotlinking (`params.hotlink_blocked` on the
+          store) and this seller's does not – a browser can never render the blocked one."""
+        if not offer.image:
+            return
+        if not p.image:
+            p.image = offer.image
+            return
+        if str(offer.image) == str(p.image):
+            return
+        image_host = urlparse(str(p.image)).netloc
+        previous_url = p.listings.get(offer.listing_key)
+        if previous_url and urlparse(previous_url).netloc == image_host:
+            p.image = offer.image  # same listing, new picture / new domain
+            return
+        blocked = self.hotlink_blocked
+        if offer.seller in blocked:
+            return
+        blocked_hosts = {
+            urlparse(url).netloc
+            for key, url in p.listings.items()
+            if key.split(":", 1)[0] in blocked
+        }
+        if image_host in blocked_hosts:
+            p.image = offer.image
+
+    @property
+    def hotlink_blocked(self) -> frozenset[str]:
+        """Sellers whose image hosts refuse cross-site `<img>` requests (from the profile)."""
+        if self._hotlink_blocked is None:
+            self._hotlink_blocked = frozenset(
+                s.slug
+                for s in settings.country_profile.configured_stores()
+                if s.params.get("hotlink_blocked")
+            )
+        return self._hotlink_blocked
 
     # ------------------------------------------------------------------ AI unification
     def merge(self, keep_id: str, drop_id: str) -> None:

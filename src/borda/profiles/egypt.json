@@ -53,7 +53,11 @@
       "slug": "makerselectronics",
       "name": "Makers Electronics",
       "base_url": "https://makerselectronics.com",
-      "platform": "woocommerce"
+      "platform": "woocommerce",
+      "params": {
+        "hotlink_blocked": true
+      },
+      "note": "wp-content/uploads sits behind a JS browser challenge: hotlinked <img> requests get 403, so other sellers' images are preferred."
     },
     {
       "slug": "mostelectronic",

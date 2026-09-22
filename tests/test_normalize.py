@@ -152,3 +152,62 @@ def test_esp32_chipsets_memory_and_accessories_stay_separate(make_offer):
     ids = [cat.resolve(make_offer("s1", name), fuzzy_threshold=93)[0] for name in names]
     assert len(set(ids)) == len(names)
     assert ids[0] == "esp32-devkit-v1-wroom-32"
+
+
+def test_product_image_follows_a_listing_that_moved_domains(make_offer):
+    """EasyTest moved hosts; the old image URLs died with the old domain."""
+    cat = Catalog()
+    old = make_offer(
+        "easytest",
+        "GT1201 Ultrasonic Thickness Gauge",
+        900,
+        url="https://www.easytest.com.eg/en/product/449/GT1201",
+        image="https://www.easytest.com.eg/images/449/cover.jpg",
+    )
+    pid, _ = cat.resolve(old, fuzzy_threshold=93)
+    assert str(cat.products[pid].image) == "https://www.easytest.com.eg/images/449/cover.jpg"
+    moved = make_offer(
+        "easytest",
+        "GT1201 Ultrasonic Thickness Gauge",
+        900,
+        url="https://easytestgroup.com/en/product/449/GT1201",  # same listing key (path)
+        image="https://easytestgroup.com/images/449/cover.jpg",
+    )
+    assert cat.resolve(moved, fuzzy_threshold=93)[0] == pid
+    assert str(cat.products[pid].image) == "https://easytestgroup.com/images/449/cover.jpg"
+    # Another seller's picture does not displace an image that still works.
+    other = make_offer(
+        "s2", "GT1201 Ultrasonic Thickness Gauge", 950, image="https://s2.example/gt1201.jpg"
+    )
+    assert cat.resolve(other, fuzzy_threshold=93)[0] == pid
+    assert str(cat.products[pid].image) == "https://easytestgroup.com/images/449/cover.jpg"
+
+
+def test_product_image_prefers_sellers_that_allow_hotlinking(make_offer):
+    cat = Catalog()
+    cat._hotlink_blocked = frozenset({"blocked-shop"})
+    first = make_offer(
+        "blocked-shop",
+        "LM358 Op-Amp DIP-8",
+        5,
+        url="https://blocked-shop.example/p/lm358",
+        image="https://blocked-shop.example/uploads/lm358.jpg",
+    )
+    pid, _ = cat.resolve(first, fuzzy_threshold=93)
+    # Only seller so far: a blocked image beats no image (the product page has a fallback).
+    assert str(cat.products[pid].image) == "https://blocked-shop.example/uploads/lm358.jpg"
+    second = make_offer(
+        "open-shop", "LM358 Op-Amp DIP-8", 6, image="https://cdn.example/open/lm358.png"
+    )
+    assert cat.resolve(second, fuzzy_threshold=93)[0] == pid
+    assert str(cat.products[pid].image) == "https://cdn.example/open/lm358.png"
+    # ... and the blocked seller cannot take it back on the next run.
+    assert cat.resolve(first, fuzzy_threshold=93)[0] == pid
+    assert str(cat.products[pid].image) == "https://cdn.example/open/lm358.png"
+
+
+def test_hotlink_blocked_sellers_come_from_the_profile():
+    from borda.scrapers.stores import BY_SLUG
+
+    assert BY_SLUG["makerselectronics"].params["hotlink_blocked"] is True
+    assert "makerselectronics" in Catalog().hotlink_blocked

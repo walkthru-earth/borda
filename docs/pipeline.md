@@ -111,7 +111,10 @@ throttled or blocked (403), `BORDA_PROXY_URL` routes the scrape through another 
    (`rapidfuzz` token-sort ≥ 93 inside a blocking key, only if numeric signatures agree:
    `10k`≠`100k`, `4gb`≠`8gb`, and accessory identities agree) → new product (slug id;
    hash suffix only on collision).
-3. Provenance: every raw name, seller and listing URL is kept on the product.
+3. Provenance: every raw name, seller and listing URL is kept on the product. The product
+   image is the first one seen, replaced only when the listing that supplied it reports a new
+   picture (including a seller that moved domains) or when it sits on a host marked
+   `params.hotlink_blocked` in the profile and another seller offers one.
 4. Pydantic AI (`enrich/ai.py`) corrects the name to the manufacturer's original, writes a
    2-3 sentence description, up to 6 spec highlights, MPN, brand, taxonomy group and tags, plus
    Arabic translations of name/description/specs; identical official names are **merged**
