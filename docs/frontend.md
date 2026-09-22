@@ -78,8 +78,24 @@ The exporter writes each projection's columns contiguously (`CATALOG_LIST_COLUMN
 order still works, just with more requests. Files are zstd-compressed and decoded with
 [hyparquet-compressors](https://github.com/hyparam/hyparquet-compressors) (also brings WASM snappy). Browse by taxonomy group, tag, seller, stock, price;
 search official names, local/Arabic names and tags with prefix matching; ✨ AI search adds
-meaning-based results; product pages show a touch-friendly SVG price chart per seller,
+meaning-based results; product pages show a touch-friendly price chart per seller listing,
 min/median/max, all seller links, "also sold as" local names and similar products.
+
+Charts use [LayerChart](https://www.layerchart.com) – the library behind shadcn-svelte's chart
+components – with its shadcn design tokens (`layerchart/shadcn-svelte.css`) mapped onto the
+app's own CSS variables, so no Tailwind is needed. `PriceRangeFilter.svelte` draws a
+histogram of the current result set's matching prices over log-spaced bins with a two-thumb
+slider (native range inputs, so it stays keyboard- and screen-reader-accessible); the slider
+spans the 1st–99th percentile and its ends mean "no minimum" / "no maximum". Exact values
+still go through the min/max fields. `PriceChart.svelte` plots one line per seller listing
+with filled dots for recorded in-stock observations, a median annotation and a data-snapped
+tooltip; the observations table below it remains the accessible equivalent. Product pages
+hide the cover image below 600 px so the name and price stay above the fold.
+
+Pictures are hotlinked from sellers. A store whose image host refuses cross-site requests
+(Makers Electronics answers `<img>` requests with a JS browser challenge) is marked
+`params.hotlink_blocked` in the profile; the pipeline then prefers another seller's image for
+shared products, and the product page falls back to the category icon when none loads.
 
 ```bash
 # Node.js 24 and the packageManager-pinned pnpm version
