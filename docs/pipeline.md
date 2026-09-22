@@ -71,12 +71,12 @@ how to publish a selected snapshot. UI translations currently cover English and 
 
 | slug | platform | method | status |
 |---|---|---|---|
-| fut-electronics, devboardsmarket, circuits-elec | Shopify | `/products.json` | on |
+| fut-electronics, devboardsmarket, circuits-elec | Shopify | `/products.json` (Shopify throttles it per client IP; the shared GitHub runner IP can stay throttled for minutes, see the 429 budget below) | on |
 | uge-one, makerselectronics, mostelectronic, fares-pcb | WooCommerce | Store API `/wp-json/wc/store/v1/products` | on |
 | microohm | WooCommerce | Store API `/wp-json/wc/store/v1/products` | off: temporarily skipped after runner 403 |
 | ic-hat | PrestaShop | XHR JSON listing | off: temporarily skipped after runner 403 |
 | ram-e-shop | Odoo 17 | HTML cards (schema.org microdata), `?ppg=200` → ~16 pages | on |
-| easytest | custom | HTML `data-et-*` attributes | on |
+| easytest | custom | HTML `data-et-*` attributes from `easytestgroup.com/en/store?page=N` (moved from `easytest.com.eg` in 2026; product paths and listing keys unchanged) | on |
 | electra | Locafy v2 (Laravel/Livewire) | anonymous `/products` Livewire snapshot + `/livewire/update` (96/page) | on |
 | elghazawy | custom Laravel | HTML cards from `maintenance-tools` and `electricity-connectors` only; all products are embedded in each category response | on |
 | maamoon | Wix | anonymous storefront GraphQL (`/_api/wix-ecommerce-storefront-web/api`, 250/page); sitemap + JSON-LD fallback | on |
@@ -93,6 +93,15 @@ EasyTest are the only HTML card parsers left.
 
 Add a store to the selected profile JSON (`src/borda/profiles/egypt.json` for Egypt). Add a platform:
 subclass `BaseScraper` (yield `RawOffer`) and register it in `scrapers/__init__.py`.
+
+**HTTP retries** (`src/borda/http.py`): transient errors (timeouts, 403/5xx, dropped HTTP/2
+connections) get `BORDA_MAX_RETRIES` (3) quick attempts at 1.5 s, 3 s, 6 s. HTTP 429 has its own
+budget – `BORDA_RATE_LIMIT_RETRIES` (5) attempts waiting `max(Retry-After, 15 s → 30 s → 60 s →
+120 s → 120 s)`, capped by `BORDA_RATE_LIMIT_MAX_BACKOFF_S` (120) – because a throttled client IP
+typically needs minutes, not seconds, and stores scrape concurrently so the wait costs little
+wall-clock. Per-store politeness is `BORDA_REQUEST_DELAY_S` (0.6) or `params.delay_s`. A store
+that still fails is reported `partial` and keeps the pages it got. When the runner IP itself is
+throttled or blocked (403), `BORDA_PROXY_URL` routes the scrape through another egress.
 
 ## Normalization & dedupe (`src/borda/normalize/`)
 

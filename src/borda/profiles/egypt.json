@@ -87,8 +87,9 @@
     {
       "slug": "easytest",
       "name": "EasyTest",
-      "base_url": "https://www.easytest.com.eg/en",
-      "platform": "easytest"
+      "base_url": "https://easytestgroup.com/en",
+      "platform": "easytest",
+      "note": "Moved from www.easytest.com.eg (DNS gone, 2026); catalog is /en/store?page=N, product paths unchanged."
     },
     {
       "slug": "electra",

@@ -1,4 +1,9 @@
-"""EasyTest (custom Laravel shop) – listing cards expose `data-et-*` attributes."""
+"""EasyTest (custom Laravel shop) – listing cards expose `data-et-*` attributes.
+
+The shop moved from `www.easytest.com.eg` to `easytestgroup.com` in 2026 and its paginated
+catalog lives at `/<lang>/store?page=N` (`params.listing` overrides the path). Product URLs
+kept the `/<lang>/product/<id>/<slug>` shape, so listing keys – and price history – carry over.
+Trailing pages repeat a handful of featured cards; the scraper stops once a page adds nothing."""
 
 from __future__ import annotations
 
@@ -13,10 +18,13 @@ from .base import BaseScraper
 class EasyTestScraper(BaseScraper):
     platform = "easytest"
 
+    default_listing = "store"
+
     async def iter_offers(self) -> AsyncIterator[RawOffer]:
+        listing = str(self.store.params.get("listing") or self.default_listing).strip("/")
         seen: set[str] = set()
         for page in range(1, self.max_pages + 1):
-            html = await self.fetch.text(f"{self.base}/products", params={"page": page})
+            html = await self.fetch.text(f"{self.base}/{listing}", params={"page": page})
             tree = HTMLParser(html)
             cards = tree.css("ul.quick-action-buttons[data-et-id]")
             if not cards:

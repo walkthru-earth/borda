@@ -375,6 +375,77 @@ async def test_wix_falls_back_to_sitemap_and_jsonld(fetcher):
     assert str(offers[0].price) == "65.00"
 
 
+def _easytest_card(pid, title, price, stock, *, lang="en"):
+    slug = title.replace(" ", "_")
+    return f"""
+    <div class="product-card"><div class="thumb">
+      <a class="image-wrap" href="https://easytestgroup.test/{lang}/product/{pid}/{slug}"></a>
+      <ul class="clearfix quick-action-buttons" data-et-id="{pid}"
+          data-et-title="عنوان عربي # {title}" data-et-price="{price}" data-et-stock="{stock}"
+          data-et-image="https://easytestgroup.test/images/{pid}/cover.jpg"></ul>
+    </div></div>"""
+
+
+@respx.mock
+async def test_easytest_paginates_store_path_and_stops_on_repeated_featured_cards(fetcher):
+    """The shop moved to easytestgroup.com with `/<lang>/store?page=N`; tail pages only repeat
+    a few featured cards. Product paths are unchanged so listing keys keep their history."""
+    store = Store(
+        slug="easytest",
+        name="EasyTest",
+        base_url="https://easytestgroup.test/en",
+        platform="easytest",
+    )
+    featured = _easytest_card("9", "Featured Meter", "999", 3)
+    pages = {
+        1: featured + _easytest_card("456", "AC/DC Magnetic Field Meter GS-100D2", "1,250", 4),
+        2: featured + _easytest_card("19", "AH-4223 4 in 1 meter", "890", 0, lang="ar"),
+        3: featured,  # nothing new -> stop
+        4: featured,  # never requested
+    }
+    routes = {
+        n: respx.get("https://easytestgroup.test/en/store", params={"page": n}).mock(
+            return_value=httpx.Response(200, text=body)
+        )
+        for n, body in pages.items()
+    }
+    assert (
+        not respx.get("https://easytestgroup.test/en/products")
+        .mock(return_value=httpx.Response(200, text=featured))
+        .called
+    )
+
+    offers, report = await build_scraper(store, fetcher, max_pages=10).run()
+
+    assert report.status == ScrapeStatus.OK and report.pages == 3 and len(offers) == 3
+    assert routes[3].called and not routes[4].called
+    by_id = {o.extra.get("stock", 0): o for o in offers}
+    gs = next(o for o in offers if "GS-100D2" in o.raw_name)
+    assert gs.raw_name == "AC/DC Magnetic Field Meter GS-100D2"
+    assert str(gs.price) == "1250.00" and gs.availability == Availability.IN_STOCK
+    assert gs.listing_key == "easytest:/en/product/456/AC/DC_Magnetic_Field_Meter_GS-100D2"
+    ah = next(o for o in offers if "AH-4223" in o.raw_name)
+    assert str(ah.url).startswith("https://easytestgroup.test/en/product/19/")  # /ar/ -> /en/
+    assert ah.availability == Availability.OUT_OF_STOCK and "stock" not in ah.extra
+    assert by_id[3].raw_name == "Featured Meter"
+
+
+@respx.mock
+async def test_easytest_listing_path_is_configurable(fetcher):
+    store = Store(
+        slug="easytest",
+        name="EasyTest",
+        base_url="https://easytestgroup.test/en",
+        platform="easytest",
+        params={"listing": "/products/"},
+    )
+    route = respx.get("https://easytestgroup.test/en/products", params={"page": 1}).mock(
+        return_value=httpx.Response(200, text="<html></html>")
+    )
+    offers, report = await build_scraper(store, fetcher, max_pages=3).run()
+    assert route.called and offers == [] and report.status == ScrapeStatus.OK
+
+
 @respx.mock
 async def test_store_failure_is_isolated_and_partial_results_kept(fetcher):
     store = Store(slug="shop", name="Shop", base_url="https://shop.test", platform="shopify")

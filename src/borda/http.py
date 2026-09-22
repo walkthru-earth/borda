@@ -34,6 +34,41 @@ class RateLimited(FetchError):
             self.retry_after = 0.0
 
 
+def _describe(exc: Exception) -> str:
+    """`str(exc)` – or the class name when httpx raises with an empty message (timeouts)."""
+    return str(exc) or type(exc).__name__
+
+
+class _RetryBudget:
+    """Decide the next backoff for one request: transient errors get `retries` quick attempts
+    (1.5 s, 3 s, 6 s, ...), HTTP 429 gets its own, slower budget of `rate_limit_retries`
+    attempts (Retry-After or 15 s doubling up to `max_backoff_s`). Returns None to give up."""
+
+    def __init__(self, retries: int, rate_limit_retries: int, max_backoff_s: float) -> None:
+        self.retries, self.rate_limit_retries, self.max_backoff_s = (
+            retries,
+            rate_limit_retries,
+            max_backoff_s,
+        )
+        self.failures = 0
+        self.rate_limited = 0
+
+    def next_backoff(self, exc: Exception) -> float | None:
+        if isinstance(exc, RateLimited):
+            if self.rate_limited >= self.rate_limit_retries:
+                return None
+            backoff = min(15.0 * 2**self.rate_limited, self.max_backoff_s)
+            self.rate_limited += 1
+            # A server that says how long to wait knows best (bounded so a bogus header
+            # cannot stall the run), otherwise back off progressively.
+            return min(max(exc.retry_after, backoff), 2 * self.max_backoff_s)
+        if self.failures >= self.retries:
+            return None
+        backoff = min(2**self.failures * 1.5, 20)
+        self.failures += 1
+        return backoff
+
+
 class Fetcher:
     def __init__(
         self,
@@ -42,11 +77,15 @@ class Fetcher:
         delay_s: float | None = None,
         timeout_s: float | None = None,
         retries: int | None = None,
+        rate_limit_retries: int | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self.cache_dir = cache_dir if cache_dir is not None else settings.cache
         self.delay_s = settings.request_delay_s if delay_s is None else delay_s
         self.retries = settings.max_retries if retries is None else retries
+        if rate_limit_retries is None:  # `retries=0` means "never retry", 429 included
+            rate_limit_retries = settings.rate_limit_retries if self.retries else 0
+        self.rate_limit_retries = rate_limit_retries
         self._last_call: dict[str, float] = {}
         self.host_delay: dict[str, float] = {}  # per-host politeness override
         self._locks: dict[str, asyncio.Lock] = {}
@@ -114,59 +153,54 @@ class Fetcher:
             self.cache_hits += 1
             return cached
         host = httpx.URL(url).host
-        last_exc: Exception | None = None
-        for attempt in range(self.retries + 1):
+        budget = self._budget()
+        while True:
             await self._throttle(host)
             try:
                 self.requests += 1
                 r = await self.client.get(url, params=params, headers=headers)
-                if r.status_code == 429:
-                    raise RateLimited(r)
-                if r.status_code in (403, 500, 502, 503, 504):
-                    raise FetchError(f"HTTP {r.status_code} for {r.url}")
-                r.raise_for_status()
+                self._check_status(r)
                 body = r.text
                 if use_cache:
                     self._cache_put(cache_path, body)
                 return body
             except (httpx.HTTPError, FetchError) as exc:
-                last_exc = exc
-                if attempt == self.retries:
-                    break
-                backoff = min(2**attempt * 1.5, 20)
-                if isinstance(exc, RateLimited):
-                    backoff = max(exc.retry_after, 15.0 * (attempt + 1))
-                log.warning("fetch %s failed (%s), retry in %.1fs", url, exc, backoff)
+                if (backoff := budget.next_backoff(exc)) is None:
+                    raise FetchError(f"giving up on {url}: {_describe(exc)}") from exc
+                log.warning("fetch %s failed (%s), retry in %.1fs", url, _describe(exc), backoff)
                 await asyncio.sleep(backoff)
-        raise FetchError(f"giving up on {url}: {last_exc}") from last_exc
 
     async def post_json(
         self, url: str, payload: Any, *, headers: dict[str, str] | None = None
     ) -> Any:
         """POST a JSON body (throttled + retried, never cached) and decode the JSON reply."""
         host = httpx.URL(url).host
-        last_exc: Exception | None = None
-        for attempt in range(self.retries + 1):
+        budget = self._budget()
+        while True:
             await self._throttle(host)
             try:
                 self.requests += 1
                 r = await self.client.post(url, json=payload, headers=headers)
-                if r.status_code == 429:
-                    raise RateLimited(r)
-                if r.status_code in (403, 500, 502, 503, 504):
-                    raise FetchError(f"HTTP {r.status_code} for {r.url}")
-                r.raise_for_status()
+                self._check_status(r)
                 return r.json()
             except (httpx.HTTPError, FetchError, json.JSONDecodeError) as exc:
-                last_exc = exc
-                if attempt == self.retries:
-                    break
-                backoff = min(2**attempt * 1.5, 20)
-                if isinstance(exc, RateLimited):
-                    backoff = max(exc.retry_after, 15.0 * (attempt + 1))
-                log.warning("post %s failed (%s), retry in %.1fs", url, exc, backoff)
+                if (backoff := budget.next_backoff(exc)) is None:
+                    raise FetchError(f"giving up on {url}: {_describe(exc)}") from exc
+                log.warning("post %s failed (%s), retry in %.1fs", url, _describe(exc), backoff)
                 await asyncio.sleep(backoff)
-        raise FetchError(f"giving up on {url}: {last_exc}") from last_exc
+
+    def _budget(self) -> _RetryBudget:
+        return _RetryBudget(
+            self.retries, self.rate_limit_retries, settings.rate_limit_max_backoff_s
+        )
+
+    @staticmethod
+    def _check_status(r: httpx.Response) -> None:
+        if r.status_code == 429:
+            raise RateLimited(r)
+        if r.status_code in (403, 500, 502, 503, 504):
+            raise FetchError(f"HTTP {r.status_code} for {r.url}")
+        r.raise_for_status()
 
     async def json(self, url: str, **kw: Any) -> Any:
         body = await self.text(url, **kw)

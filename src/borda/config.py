@@ -27,6 +27,11 @@ class Settings(BaseSettings):
     request_timeout_s: float = 30.0
     request_delay_s: float = 0.6
     max_retries: int = 3
+    # HTTP 429 gets its own, more patient budget: Shopify throttles `/products.json` per client
+    # IP and a shared CI runner can stay throttled for minutes even at a polite request rate.
+    # Backoff is max(Retry-After, 15 s, 30 s, 60 s, 120 s, ...) capped per attempt below.
+    rate_limit_retries: int = 5
+    rate_limit_max_backoff_s: float = 120.0
     proxy_url: str | None = None  # e.g. http://user:pass@host:port – for stores that block CI IPs
     max_pages_per_store: int = 400
     http_cache_ttl_h: float = 20.0  # re-use fetched pages within a run window / retry
