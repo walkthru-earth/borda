@@ -48,4 +48,9 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm test
       - run: pnpm run check
-      - run: pnpm run build
+      - name: Build
+        env:
+          BASE_PATH: /borda
+          SITE_URL: https://walkthru.earth/borda
+          VITE_SITE_ORIGIN: https://walkthru.earth
+        run: pnpm run build
