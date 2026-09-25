@@ -80,6 +80,7 @@ how to publish a selected snapshot. UI translations currently cover English and 
 | fut-electronics, devboardsmarket, circuits-elec | Shopify | `/products.json` (Shopify throttles it per client IP; the shared GitHub runner IP can stay throttled for minutes, see the 429 budget below) | on |
 | uge-one, makerselectronics, mostelectronic, fares-pcb | WooCommerce | Store API `/wp-json/wc/store/v1/products` | on |
 | microohm | WooCommerce | Store API `/wp-json/wc/store/v1/products` | off: temporarily skipped after runner 403 |
+| lancer3d | WooCommerce | Store API `/wp-json/wc/store/v1/products` | off: temporarily skipped after runner 403 (Hostinger CDN) |
 | ic-hat | PrestaShop | XHR JSON listing | off: temporarily skipped after runner 403 |
 | ram-e-shop | Odoo 17 | HTML cards (schema.org microdata), `?ppg=200` → ~16 pages | on |
 | easytest | custom | HTML `data-et-*` attributes from `easytestgroup.com/en/store?page=N` (moved from `easytest.com.eg` in 2026; product paths and listing keys unchanged) | on |

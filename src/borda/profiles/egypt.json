@@ -76,7 +76,8 @@
       "name": "Lancer 3D",
       "base_url": "https://lancer3d.com",
       "platform": "woocommerce",
-      "note": "3D printing specialist (printers, filament, mainboards, stepper drivers); open WooCommerce Store API, ~870 products."
+      "enabled": false,
+      "note": "3D printing specialist (printers, filament, mainboards, stepper drivers), WooCommerce Store API, ~870 products. Temporarily skipped: Hostinger CDN returns 403 to the GitHub-hosted runner (works from residential IPs); re-enable when a proxy is configured."
     },
     {
       "slug": "electrolik",
