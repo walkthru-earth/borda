@@ -57,7 +57,7 @@ def us_profile():
 def test_packaged_default_keeps_existing_market_and_paths(tmp_path):
     profile = load_profile("egypt")
     assert profile.currency == "EGP" and profile.country_code == "EG"
-    assert len(profile.stores) == 17
+    assert len(profile.stores) == 20
     assert {s.currency for s in profile.configured_stores()} == {"EGP"}
     assert {"electra", "elghazawy"} <= {s.slug for s in profile.configured_stores()}
     cfg = Settings(repo_root=tmp_path, _env_file=None)

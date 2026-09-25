@@ -7,6 +7,7 @@ import httpx
 import pytest
 import respx
 
+from borda.config import settings
 from borda.http import Fetcher
 from borda.models import Availability, ScrapeStatus
 from borda.scrapers import BY_SLUG, PLATFORMS, Store, build_scraper
@@ -83,6 +84,106 @@ async def test_woocommerce_minor_units_and_stock(fetcher):
     assert o.raw_name == "Arduino Uno R3 (SMD)"
     assert str(o.price) == "450.00" and o.availability == Availability.OUT_OF_STOCK
     assert o.category == "Arduino" and o.store_tags == ["Boards", "Arduino"]
+
+
+def _woo_page(page: int, count: int) -> list[dict]:
+    return [
+        {
+            "name": f"Part {page}-{i}",
+            "permalink": f"https://woo.test/product/p{page}-{i}",
+            "prices": {"price": "1000", "currency_code": "EGP", "currency_minor_unit": 2},
+            "is_in_stock": True,
+            "categories": [],
+            "tags": [],
+            "images": [],
+            "type": "simple",
+        }
+        for i in range(count)
+    ]
+
+
+def _woo_route(pages: dict[int, list[dict]]):
+    route = respx.get(url__regex=r"https://woo\.test/wp-json/wc/store/v1/products.*")
+    seen: list[httpx.URL] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url)
+        return httpx.Response(200, json=pages.get(int(request.url.params["page"]), []))
+
+    route.side_effect = handler
+    return seen
+
+
+@respx.mock
+async def test_woocommerce_null_page_size_omits_per_page_and_uses_default_page_size(fetcher):
+    store = Store(
+        slug="woo",
+        name="Woo",
+        base_url="https://woo.test",
+        platform="woocommerce",
+        params={"page_size": None},
+    )
+    seen = _woo_route({1: _woo_page(1, 10), 2: _woo_page(2, 10), 3: _woo_page(3, 4)})
+    offers, report = await build_scraper(store, fetcher, max_pages=50).run()
+    assert report.status == ScrapeStatus.OK
+    assert report.offers == 24 and len(offers) == 24 and report.pages == 3
+    # Continues past full 10-item pages and stops on the short page without probing page 4.
+    assert [int(u.params["page"]) for u in seen] == [1, 2, 3]
+    assert all("per_page" not in u.params for u in seen)
+
+
+@respx.mock
+async def test_woocommerce_int_page_size_overrides_default(fetcher):
+    store = Store(
+        slug="woo",
+        name="Woo",
+        base_url="https://woo.test",
+        platform="woocommerce",
+        params={"page_size": 5},
+    )
+    seen = _woo_route({1: _woo_page(1, 5), 2: _woo_page(2, 2)})
+    offers, _ = await build_scraper(store, fetcher, max_pages=50).run()
+    assert len(offers) == 7
+    assert [u.params["per_page"] for u in seen] == ["5", "5"]
+
+
+@respx.mock
+async def test_woocommerce_default_sends_per_page_100(fetcher):
+    store = Store(slug="woo", name="Woo", base_url="https://woo.test", platform="woocommerce")
+    seen = _woo_route({1: _woo_page(1, 3)})
+    offers, _ = await build_scraper(store, fetcher, max_pages=50).run()
+    assert len(offers) == 3
+    assert [u.params["per_page"] for u in seen] == ["100"]
+
+
+@respx.mock
+async def test_store_max_pages_param_replaces_pipeline_default(fetcher):
+    store = Store(
+        slug="woo",
+        name="Woo",
+        base_url="https://woo.test",
+        platform="woocommerce",
+        params={"page_size": None, "max_pages": 3},
+    )
+    seen = _woo_route({p: _woo_page(p, 10) for p in range(1, 10)})
+    default = settings.max_pages_per_store
+    assert build_scraper(store, fetcher, max_pages=default).max_pages == 3
+    raised = store.model_copy(update={"params": {"max_pages": default + 400}})
+    assert build_scraper(raised, fetcher, max_pages=default).max_pages == default + 400
+    offers, report = await build_scraper(store, fetcher, max_pages=default).run()
+    assert report.pages == 3 and len(offers) == 30
+    assert [int(u.params["page"]) for u in seen] == [1, 2, 3]
+
+
+def test_lower_dev_max_pages_cap_wins_over_store_param(fetcher):
+    store = Store(
+        slug="woo",
+        name="Woo",
+        base_url="https://woo.test",
+        platform="woocommerce",
+        params={"max_pages": 800},
+    )
+    assert build_scraper(store, fetcher, max_pages=2).max_pages == 2
 
 
 @respx.mock

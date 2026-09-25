@@ -72,6 +72,31 @@
       "platform": "woocommerce"
     },
     {
+      "slug": "lancer3d",
+      "name": "Lancer 3D",
+      "base_url": "https://lancer3d.com",
+      "platform": "woocommerce",
+      "note": "3D printing specialist (printers, filament, mainboards, stepper drivers); open WooCommerce Store API, ~870 products."
+    },
+    {
+      "slug": "electrolik",
+      "name": "Electrolik",
+      "base_url": "https://electrolik-eg.com",
+      "platform": "woocommerce",
+      "params": {
+        "page_size": null,
+        "max_pages": 800
+      },
+      "note": "LiteSpeed WAF returns 403 for any per_page query param, so pages use the Store API default of 10 (~5.7k products, ~570 pages)."
+    },
+    {
+      "slug": "mecha-tronx",
+      "name": "Mecha-tronx",
+      "base_url": "https://mecha-tronx.com",
+      "platform": "mechatronx",
+      "note": "Custom Laravel storefront with a public JSON API (/api/products, per_page=100, rate limit 180/min)."
+    },
+    {
       "slug": "ic-hat",
       "name": "IC Hat",
       "base_url": "https://ic-hat.com/en",

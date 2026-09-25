@@ -18,13 +18,25 @@ _TAG_RE = re.compile(r"<[^>]+>")
 class WooCommerceScraper(BaseScraper):
     platform = "woocommerce"
     page_size = 100
+    default_page_size = 10  # what the Store API returns when `per_page` is omitted
 
     async def iter_offers(self) -> AsyncIterator[RawOffer]:
         endpoint = f"{self.base}/wp-json/wc/store/v1/products"
+        # `params.page_size: null` omits `per_page` (some WAFs reject it) and relies on the
+        # API default page size; an int overrides the class default.
+        send_per_page = True
+        page_size = self.page_size
+        if "page_size" in self.store.params:
+            if self.store.params["page_size"] is None:
+                send_per_page = False
+                page_size = self.default_page_size
+            else:
+                page_size = int(self.store.params["page_size"])
         for page in range(1, self.max_pages + 1):
-            data = await self.fetch.json(
-                endpoint, params={"per_page": self.page_size, "page": page, "orderby": "id"}
-            )
+            params: dict[str, int | str] = {"page": page, "orderby": "id"}
+            if send_per_page:
+                params = {"per_page": page_size, **params}
+            data = await self.fetch.json(endpoint, params=params)
             if not isinstance(data, list) or not data:
                 break
             self.pages += 1
@@ -61,5 +73,5 @@ class WooCommerceScraper(BaseScraper):
                 )
                 if offer:
                     yield offer
-            if len(data) < self.page_size:
+            if len(data) < page_size:
                 break

@@ -7,6 +7,7 @@ from .base import BaseScraper, Store
 from .easytest import EasyTestScraper
 from .elghazawy import ElGhazawyScraper
 from .locafy import LocafyScraper
+from .mechatronx import MechatronxScraper
 from .odoo import OdooScraper
 from .prestashop import PrestaShopScraper
 from .shopify import ShopifyScraper
@@ -25,6 +26,7 @@ PLATFORMS: dict[str, type[BaseScraper]] = {
         ElGhazawyScraper,
         LocafyScraper,
         WixScraper,
+        MechatronxScraper,
     )
 }
 

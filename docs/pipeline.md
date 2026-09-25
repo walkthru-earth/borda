@@ -47,6 +47,12 @@ an actual compatible storefront and enable it only when ready to scrape:
 ```
 
 Store definitions support `enabled`, `note`, `params` and an optional currency override.
+`params.max_pages` sets a per-store page ceiling that replaces the pipeline default
+(`BORDA_MAX_PAGES_PER_STORE`, 400), so a large catalog can go past it. A lower `--max-pages`
+dev cap still wins. WooCommerce stores also accept `params.page_size`. An integer overrides the
+default `per_page=100`, and `null` omits `per_page` entirely for sites whose firewall rejects it,
+in which case the scraper assumes the Store API default of 10 items when detecting the last page.
+Pagination stops on an empty or short page either way.
 A profile configures existing adapters; it does not automatically support every storefront.
 Shopify and WooCommerce adapters target their public catalog interfaces, while store-specific
 adapters may require changes for another site. Add and test an adapter for unsupported formats.
@@ -79,6 +85,7 @@ how to publish a selected snapshot. UI translations currently cover English and 
 | easytest | custom | HTML `data-et-*` attributes from `easytestgroup.com/en/store?page=N` (moved from `easytest.com.eg` in 2026; product paths and listing keys unchanged) | on |
 | electra | Locafy v2 (Laravel/Livewire) | anonymous `/products` Livewire snapshot + `/livewire/update` (96/page) | on |
 | elghazawy | custom Laravel | HTML cards from `maintenance-tools` and `electricity-connectors` only; all products are embedded in each category response | on |
+| mecha-tronx | custom Laravel JSON API | public `/api/products` listing (100/page, paged by `meta.last_page`) plus one `/api/products/{slug}` detail per variant parent, emitted as one offer per variation at `/product/{variant_id}` | on |
 | maamoon | Wix | anonymous storefront GraphQL (`/_api/wix-ecommerce-storefront-web/api`, 250/page); sitemap + JSON-LD fallback | on |
 | eshopmas | WooCommerce | – | off: Cloudflare challenge |
 | rsdelivers | Next.js | – | off: prices rendered client-side, >100k SKUs |

@@ -28,11 +28,22 @@ class BaseScraper(ABC):
     def __init__(self, store: Store, fetcher: Fetcher, *, max_pages: int = 400) -> None:
         self.store = store
         self.fetch = fetcher
-        self.max_pages = max_pages
+        self.max_pages = self._store_max_pages(max_pages)
         if (d := store.params.get("delay_s")) is not None:
             fetcher.host_delay[store.base_url.host or ""] = float(d)
         self.pages = 0
         self.warnings: list[str] = []
+
+    def _store_max_pages(self, max_pages: int) -> int:
+        """Apply `params.max_pages`: it replaces the pipeline default ceiling for this store (so
+        a large catalog can go past it), but a lower explicit dev cap (`--max-pages`) still wins."""
+        override = self.store.params.get("max_pages")
+        if override is None:
+            return max_pages
+        override = int(override)
+        if max_pages < settings.max_pages_per_store:
+            return min(max_pages, override)
+        return override
 
     @property
     def base(self) -> str:
