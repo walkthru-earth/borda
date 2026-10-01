@@ -69,7 +69,9 @@
       "slug": "fares-pcb",
       "name": "Fares PCB",
       "base_url": "https://fares-pcb.com",
-      "platform": "woocommerce"
+      "platform": "woocommerce",
+      "enabled": false,
+      "note": "Temporarily skipped: the site serves an Under Maintenance page and its WooCommerce Store API returns 404 (2026-10-01); re-enable when the catalog returns."
     },
     {
       "slug": "lancer3d",

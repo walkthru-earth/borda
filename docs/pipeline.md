@@ -78,7 +78,8 @@ how to publish a selected snapshot. UI translations currently cover English and 
 | slug | platform | method | status |
 |---|---|---|---|
 | fut-electronics, devboardsmarket, circuits-elec | Shopify | `/products.json` (Shopify throttles it per client IP; the shared GitHub runner IP can stay throttled for minutes, see the 429 budget below) | on |
-| uge-one, makerselectronics, mostelectronic, fares-pcb | WooCommerce | Store API `/wp-json/wc/store/v1/products` | on |
+| uge-one, makerselectronics, mostelectronic | WooCommerce | Store API `/wp-json/wc/store/v1/products` | on |
+| fares-pcb | WooCommerce | Store API `/wp-json/wc/store/v1/products` | off: site under maintenance; API returns 404 (2026-10-01) |
 | microohm | WooCommerce | Store API `/wp-json/wc/store/v1/products` | off: temporarily skipped after runner 403 |
 | lancer3d | WooCommerce | Store API `/wp-json/wc/store/v1/products` | off: temporarily skipped after runner 403 (Hostinger CDN) |
 | ic-hat | PrestaShop | XHR JSON listing | off: temporarily skipped after runner 403 |
