@@ -1,23 +1,24 @@
 {
- "run_id": "20261001T141856Z",
- "ts": "2026-10-01T14:18:56+00:00",
- "duration_s": 476.0,
+ "run_id": "20261001T101421Z",
+ "ts": "2026-10-01T10:14:21+00:00",
+ "duration_s": 2118.2,
  "stores": [
   {
    "seller": "fut-electronics",
    "status": "failed",
    "offers": 0,
    "pages": 0,
-   "duration_s": 420.8,
+   "duration_s": 420.7,
    "error": "FetchError: giving up on https://store.fut-electronics.com/products.json: HTTP 429 for https://store.fut-electronics.com/products.json?limit=250&page=1",
    "warnings": []
   },
   {
    "seller": "devboardsmarket",
-   "status": "ok",
-   "offers": 50,
-   "pages": 1,
-   "duration_s": 180.9,
+   "status": "failed",
+   "offers": 0,
+   "pages": 0,
+   "duration_s": 420.9,
+   "error": "FetchError: giving up on https://devboardsmarket.com/products.json: HTTP 429 for https://devboardsmarket.com/products.json?limit=250&page=1",
    "warnings": []
   },
   {
@@ -25,25 +26,182 @@
    "status": "failed",
    "offers": 0,
    "pages": 0,
-   "duration_s": 420.8,
+   "duration_s": 420.7,
    "error": "FetchError: giving up on https://circuits-elec.com/products.json: HTTP 429 for https://circuits-elec.com/products.json?limit=250&page=1",
+   "warnings": []
+  },
+  {
+   "seller": "uge-one",
+   "status": "ok",
+   "offers": 5879,
+   "pages": 59,
+   "duration_s": 166.4,
+   "warnings": [
+    "uge-one: dropped listing 'C': String should have at least 2 characters"
+   ]
+  },
+  {
+   "seller": "microohm",
+   "status": "skipped",
+   "offers": 0,
+   "pages": 0,
+   "duration_s": 0.0,
+   "error": "Temporarily skipped: 403 from the GitHub-hosted runner; re-enable when a proxy is configured.",
+   "warnings": []
+  },
+  {
+   "seller": "makerselectronics",
+   "status": "ok",
+   "offers": 8854,
+   "pages": 89,
+   "duration_s": 377.3,
+   "warnings": []
+  },
+  {
+   "seller": "mostelectronic",
+   "status": "ok",
+   "offers": 1537,
+   "pages": 16,
+   "duration_s": 43.6,
+   "warnings": []
+  },
+  {
+   "seller": "fares-pcb",
+   "status": "failed",
+   "offers": 0,
+   "pages": 0,
+   "duration_s": 12.3,
+   "error": "FetchError: giving up on https://fares-pcb.com/wp-json/wc/store/v1/products: Client error '404 Not Found' for url 'https://fares-pcb.com/wp-json/wc/store/v1/products?per_page=100&page=1&orderby=id'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404",
+   "warnings": []
+  },
+  {
+   "seller": "lancer3d",
+   "status": "skipped",
+   "offers": 0,
+   "pages": 0,
+   "duration_s": 0.0,
+   "error": "3D printing specialist (printers, filament, mainboards, stepper drivers), WooCommerce Store API, ~870 products. Temporarily skipped: Hostinger CDN returns 403 to the GitHub-hosted runner (works from residential IPs); re-enable when a proxy is configured.",
+   "warnings": []
+  },
+  {
+   "seller": "electrolik",
+   "status": "ok",
+   "offers": 5696,
+   "pages": 570,
+   "duration_s": 435.5,
+   "warnings": []
+  },
+  {
+   "seller": "mecha-tronx",
+   "status": "ok",
+   "offers": 3913,
+   "pages": 34,
+   "duration_s": 96.2,
+   "warnings": []
+  },
+  {
+   "seller": "ic-hat",
+   "status": "skipped",
+   "offers": 0,
+   "pages": 0,
+   "duration_s": 0.0,
+   "error": "Temporarily skipped: 403 from the GitHub-hosted runner; re-enable when a proxy is configured.",
+   "warnings": []
+  },
+  {
+   "seller": "ram-e-shop",
+   "status": "ok",
+   "offers": 2873,
+   "pages": 16,
+   "duration_s": 28.8,
+   "warnings": []
+  },
+  {
+   "seller": "easytest",
+   "status": "ok",
+   "offers": 491,
+   "pages": 42,
+   "duration_s": 24.9,
+   "warnings": []
+  },
+  {
+   "seller": "electra",
+   "status": "partial",
+   "offers": 4701,
+   "pages": 49,
+   "duration_s": 1521.9,
+   "error": "FetchError: giving up on https://electra.store/livewire/update: ReadTimeout",
+   "warnings": [
+    "electra: dropped listing 'Battery 9V MP (Ni-MH) Rechargeable 200mah': Input should be greater than 0",
+    "electra: dropped listing 'UNI-T UT330TH USB Dataloggers': Input should be greater than 0",
+    "electra: dropped listing 'UNI-T UTi722M Smartphone Thermal Camera Module for Android': Input should be greater than 0"
+   ]
+  },
+  {
+   "seller": "elghazawy",
+   "status": "ok",
+   "offers": 626,
+   "pages": 2,
+   "duration_s": 1.7,
+   "warnings": []
+  },
+  {
+   "seller": "maamoon",
+   "status": "ok",
+   "offers": 1323,
+   "pages": 6,
+   "duration_s": 3.7,
+   "warnings": []
+  },
+  {
+   "seller": "eshopmas",
+   "status": "skipped",
+   "offers": 0,
+   "pages": 0,
+   "duration_s": 0.0,
+   "error": "Cloudflare challenge blocks both HTML and the Store API from CI runners.",
+   "warnings": []
+  },
+  {
+   "seller": "rsdelivers",
+   "status": "skipped",
+   "offers": 0,
+   "pages": 0,
+   "duration_s": 0.0,
+   "error": "Prices are rendered client-side (JSON-LD reports 0); catalog is >100k SKUs.",
+   "warnings": []
+  },
+  {
+   "seller": "amazon-eg",
+   "status": "skipped",
+   "offers": 0,
+   "pages": 0,
+   "duration_s": 0.0,
+   "error": "Optional per brief; requires anti-bot handling – out of scope for now.",
    "warnings": []
   }
  ],
- "offers_scraped": 50,
- "offers_kept": 50,
+ "offers_scraped": 35893,
+ "offers_kept": 35893,
  "products_total": 34754,
- "products_new": 0,
- "flags": {},
+ "products_new": 492,
+ "flags": {
+  "missing_price": 190,
+  "outlier_high": 22,
+  "outlier_low": 9,
+  "implausible_price": 1
+ },
  "embeddings": {
-  "computed": 22,
-  "reused": 34732,
+  "computed": 647,
+  "reused": 34107,
   "neighbours": 34754,
   "error": null
  },
  "resumed_stores": [],
  "errors": [
   "fut-electronics: FetchError: giving up on https://store.fut-electronics.com/products.json: HTTP 429 for https://store.fut-electronics.com/products.json?limit=250&page=1",
-  "circuits-elec: FetchError: giving up on https://circuits-elec.com/products.json: HTTP 429 for https://circuits-elec.com/products.json?limit=250&page=1"
+  "devboardsmarket: FetchError: giving up on https://devboardsmarket.com/products.json: HTTP 429 for https://devboardsmarket.com/products.json?limit=250&page=1",
+  "circuits-elec: FetchError: giving up on https://circuits-elec.com/products.json: HTTP 429 for https://circuits-elec.com/products.json?limit=250&page=1",
+  "fares-pcb: FetchError: giving up on https://fares-pcb.com/wp-json/wc/store/v1/products: Client error '404 Not Found' for url 'https://fares-pcb.com/wp-json/wc/store/v1/products?per_page=100&page=1&orderby=id'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404"
  ]
 }
