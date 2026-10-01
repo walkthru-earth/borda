@@ -16,40 +16,40 @@
  "schema_version": 1,
  "pipeline_version": "0.1.0",
  "parquet_format": "2.6",
- "generated_at": "2026-09-25T13:34:52Z",
- "exported_at": "2026-09-25T15:22:17Z",
- "products": 34262,
- "offers_total": 183574,
+ "generated_at": "2026-10-01T10:14:21Z",
+ "exported_at": "2026-10-01T10:49:39Z",
+ "products": 34754,
+ "offers_total": 219467,
  "groups": {
   "3d-printing-cnc": 1259,
-  "connectors-cables": 2497,
-  "dev-boards": 963,
-  "displays-leds": 1275,
-  "microcontrollers-ics": 1746,
-  "motors-drivers": 1897,
-  "other": 3583,
-  "passive-components": 4580,
-  "power": 4993,
-  "prototyping": 1069,
-  "robotics-kits": 695,
-  "semiconductors": 2927,
-  "sensors": 1962,
-  "tools-instruments": 4123,
-  "wireless-iot": 693
+  "connectors-cables": 2498,
+  "dev-boards": 969,
+  "displays-leds": 1291,
+  "microcontrollers-ics": 1758,
+  "motors-drivers": 1911,
+  "other": 3681,
+  "passive-components": 4810,
+  "power": 5037,
+  "prototyping": 1079,
+  "robotics-kits": 700,
+  "semiconductors": 2944,
+  "sensors": 1973,
+  "tools-instruments": 4144,
+  "wireless-iot": 700
  },
  "files": {
   "catalog.parquet": {
-   "sha256": "ca6d35a682692f6a28bdd9a5bfc3308dc737d5696ff9e303c3d79aa401471c95",
-   "bytes": 8123572,
-   "footer": 85110,
-   "rows": 34262,
+   "sha256": "678c481fbb020afdecef1ac92113a811df5b1f6ce00541379a41218e6cfc22dd",
+   "bytes": 8206424,
+   "footer": 84981,
+   "rows": 34754,
    "row_groups": 17
   },
   "embeddings.parquet": {
-   "sha256": "8b178e6db734de4d6fda4b6962dd4c3dbe10b21741bb869069a7f337ebcd132b",
-   "bytes": 8783664,
-   "footer": 11437,
-   "rows": 34262,
+   "sha256": "cb08ffe7921449d71d9a0b69bf466c6d626039907c7b5c21bd11d042f08a68a4",
+   "bytes": 8920681,
+   "footer": 11704,
+   "rows": 34754,
    "row_groups": 9
   },
   "enrichment.parquet": {
@@ -60,18 +60,18 @@
    "row_groups": 1
   },
   "listings.parquet": {
-   "sha256": "0d274520d7aadd3f779c1174fb2354cc1563fa6a278aa067f2a6f44ea4683b7e",
-   "bytes": 11302211,
-   "footer": 142252,
-   "rows": 40007,
+   "sha256": "a7dd0a927e4fa0dffce23589836b4a27bf08d72702cc1f02ca3b7db0c3d4fb94",
+   "bytes": 11392824,
+   "footer": 147819,
+   "rows": 40336,
    "row_groups": 40
   },
-  "offers/year=2026/month=09/20260925T133452Z.parquet": {
-   "sha256": "3e19fe7aeaf7156959cef80d6a05c730865f9b99ddbf0255fd410be2f29a5627",
-   "bytes": 10436,
-   "footer": 3413,
-   "rows": 50,
-   "row_groups": 1
+  "offers/year=2026/month=10/20261001T101421Z.parquet": {
+   "sha256": "a25dc11d048031ea10a70afcb8e162fbcae6b2f77fd1d2146009610b90833f38",
+   "bytes": 2404722,
+   "footer": 12562,
+   "rows": 35893,
+   "row_groups": 5
   },
   "redirects.parquet": {
    "sha256": "f4d86cfa416a282da0f9007075cace3b93a8f9984d8c6898b609c78772856ae2",
@@ -81,24 +81,24 @@
    "row_groups": 1
   },
   "series.parquet": {
-   "sha256": "87915717e12ded99cde012dc29503539277c44e122b172bd8aea2b21a0b8a977",
-   "bytes": 1589513,
-   "footer": 48432,
-   "rows": 183485,
-   "row_groups": 45
+   "sha256": "cae0342c359017a3ffaf76dba9ce05768b67a595703c14788d247812d7024eb8",
+   "bytes": 1678844,
+   "footer": 58118,
+   "rows": 219346,
+   "row_groups": 54
   },
   "stats.parquet": {
-   "sha256": "dda0dda27ac9273a2ad1fd2829a15fdcda2b25cfa1e38e89a492792d35170d8e",
-   "bytes": 3111412,
-   "footer": 44733,
-   "rows": 34259,
+   "sha256": "62ff74f16c1bec02167fec94e7eb2af4036dc0223de320c19138f4b313f563ad",
+   "bytes": 3132786,
+   "footer": 43605,
+   "rows": 34520,
    "row_groups": 17
   },
-  "store_runs/year=2026/month=09/20260925T133452Z.parquet": {
-   "sha256": "05f83c1a9a1fa80fc5a75747ca13d349499cfc3da1193efd9709619c3f18331e",
-   "bytes": 2530,
-   "footer": 1706,
-   "rows": 1,
+  "store_runs/year=2026/month=10/20261001T101421Z.parquet": {
+   "sha256": "5251908df1876d53de5a5ba86d2b1b746f15fe05d8543af5590869727b701a24",
+   "bytes": 4308,
+   "footer": 2071,
+   "rows": 20,
    "row_groups": 1
   }
  },
@@ -202,6 +202,16 @@
    "new_products": 0,
    "stores_ok": 1,
    "stores_failed": 0
+  },
+  {
+   "run_id": "20261001T101421Z",
+   "ts": "2026-10-01T10:14:21Z",
+   "digest": "2d612ab1d6822c71",
+   "products": 34754,
+   "offers": 35893,
+   "new_products": 492,
+   "stores_ok": 10,
+   "stores_failed": 4
   }
  ]
 }
