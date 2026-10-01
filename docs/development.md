@@ -58,7 +58,9 @@ when only derived exports need refreshing.
   least one store succeeded; the job then turns red only if a store failed **or enrichment was
   requested but produced nothing with an error** (the model/endpoint contract broke – e.g. every
   batch answering HTTP 400). Secrets: `HETZNER_INFERENCE_TOKEN`, optional `BORDA_PROXY_URL`.
-  Manual dispatch accepts `stores`, `max_pages`, `ai`, `fresh`. This workflow explicitly uses
+  Manual dispatch accepts `stores`, `max_pages`, `ai`, `fresh`, and `dry_run`. Use `dry_run=true`
+  when probing selected stores or capped pages; it reports the attempted run without replacing
+  the published snapshot. This workflow explicitly uses
   `BORDA_PROFILE=egypt` to maintain the default published snapshot. Custom-country jobs must
   select their profile and corresponding data/diagnostic paths separately.
   - **Logs:** every phase is a collapsible `::group::` with its duration; stores log progress every

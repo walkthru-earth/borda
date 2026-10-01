@@ -21,6 +21,10 @@ on:
         description: "Ignore checkpoints from an earlier attempt this month"
         type: boolean
         default: false
+      dry_run:
+        description: "Probe stores without writing or committing a catalog snapshot"
+        type: boolean
+        default: false
 
 concurrency:
   group: borda-scrape
@@ -101,6 +105,7 @@ jobs:
           [ -n "${{ inputs.stores }}" ] && args+=(--stores ${{ inputs.stores }})
           [ -n "${{ inputs.max_pages }}" ] && args+=(--max-pages "${{ inputs.max_pages }}")
           [ "${{ inputs.fresh }}" = "true" ] && args+=(--fresh)
+          [ "${{ inputs.dry_run }}" = "true" ] && args+=(--dry-run)
           # one stream: phase groups, progress and ::annotations:: in order; copy kept as run.log
           uv run borda run "${args[@]}" --out diagnostics/run-summary.json 2>&1 | tee diagnostics/run.log
           echo "run_id=$(python3 -c 'import json;print(json.load(open("diagnostics/run-summary.json"))["run_id"])')" >> "$GITHUB_OUTPUT"
@@ -118,12 +123,12 @@ jobs:
           {
             echo "## Borda scrape ${{ steps.run.outputs.run_id }}"
             echo
-            if [ ! -f diagnostics/latest.json ]; then echo "run did not produce diagnostics – see run.log artifact"; exit 0; fi
+            if [ ! -f diagnostics/run-summary.json ]; then echo "run did not produce diagnostics – see run.log artifact"; exit 0; fi
             echo '| store | status | offers | pages | error |'
             echo '|---|---|---:|---:|---|'
             python3 - <<'PY'
           import json
-          d = json.load(open("diagnostics/latest.json"))
+          d = json.load(open("diagnostics/run-summary.json"))
           for s in d["stores"]:
               err = (s.get("error") or "").replace("|", "\\|")[:120]
               print(f"| {s['seller']} | {s['status']} | {s['offers']} | {s['pages']} | {err} |")
@@ -155,7 +160,7 @@ jobs:
           retention-days: 90
 
       - name: Commit data + diagnostics
-        if: success()
+        if: ${{ success() && inputs.dry_run != true }}
         run: |
           git config user.name "borda-bot"
           git config user.email "borda-bot@users.noreply.github.com"
@@ -174,7 +179,8 @@ jobs:
         run: |
           python3 - <<'PY'
           import json, sys
-          d = json.load(open("diagnostics/latest.json"))
+          source = "diagnostics/run-summary.json" if "${{ inputs.dry_run }}" == "true" else "diagnostics/latest.json"
+          d = json.load(open(source))
           failed = [s["seller"] for s in d["stores"] if s["status"] == "failed"]
           print("failed stores:", failed or "none")
           e = d.get("enrichment") or {}
