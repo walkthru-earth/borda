@@ -90,5 +90,7 @@ when only derived exports need refreshing.
 - `ci.yml` – installed `borda --help` smoke test, ruff + pytest, Node 24 search/filter regression tests (`pnpm test`), svelte-check + build.
 - `deploy-pages.yml` – rebuilds the SPA with the latest Parquet after each data commit. Secrets:
   `PUBLIC_POSTHOG_KEY`, `PUBLIC_POSTHOG_HOST` (PostHog analytics; the build is a no-op without them).
+  The monthly workflow explicitly dispatches Pages after its bot push: GitHub does not start
+  push-triggered workflows for commits made with `GITHUB_TOKEN`.
 
 Pre-commit (ruff format/lint, uv lock, secrets guard, pytest): `uv tool install pre-commit && pre-commit install`.
